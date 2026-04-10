@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["lib"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+description = "A tool for simple language-aware exploration and modification of source code."
+license = "MIT"
+repository = "https://github.com/theduke/smartedit"
+readme = "README.md"
+
+[package]
+name = "smartedit-cli"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+
+[[bin]]
+name = "smartedit"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
+globset = "0.4.18"
+ignore = "0.4.24"
+smartedit = { path = "lib", version = "0.0.1" }
