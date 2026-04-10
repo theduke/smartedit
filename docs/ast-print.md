@@ -3,6 +3,7 @@
 Supported languages:
 
 - Rust
+- Python
 
 `smartedit ast-print` prints a structured outline of source files. It is meant for quickly understanding a file without reading it top to bottom.
 
@@ -14,6 +15,13 @@ For Rust, the output can include items such as:
 - traits
 - modules
 - `impl` blocks and their methods
+
+For Python, the output can include items such as:
+
+- classes
+- functions and `async` functions
+- nested methods, classes, and functions
+- module and docstring content with `--doc`
 
 You can use it to:
 
@@ -127,6 +135,12 @@ Quick overview of a Rust file:
 
 ```bash
 smartedit ast-print src/lib.rs
+```
+
+Quick overview of a Python file:
+
+```bash
+smartedit ast-print src/example.py
 ```
 
 Review public APIs and signatures across a directory:

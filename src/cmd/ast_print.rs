@@ -351,6 +351,24 @@ mod tests {
     }
 
     #[test]
+    fn resolve_inputs_includes_python_files() {
+        let dir = TestDir::new("python-direct");
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/keep.rs"), "fn keep() {}\n").unwrap();
+        fs::write(dir.path().join("src/tool.py"), "def run():\n    pass\n").unwrap();
+
+        let resolved = resolve_ast_inputs(&["src/**/*".to_owned()], dir.path(), false).unwrap();
+
+        assert_eq!(
+            resolved.supported_files,
+            vec![
+                dir.path().join("src/keep.rs"),
+                dir.path().join("src/tool.py")
+            ]
+        );
+    }
+
+    #[test]
     fn formats_matching_start_and_end_file_markers() {
         let dir = TestDir::new("markers");
         let path = dir.path().join("src/main.rs");

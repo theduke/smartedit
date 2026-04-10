@@ -8,12 +8,14 @@ use crate::error::{Result, SmartEditError};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AstLanguage {
     Rust,
+    Python,
 }
 
 impl AstLanguage {
     pub fn from_path(path: &Path) -> Option<Self> {
         match path.extension().and_then(|ext| ext.to_str()) {
             Some("rs") => Some(Self::Rust),
+            Some("py") => Some(Self::Python),
             _ => None,
         }
     }
@@ -58,6 +60,7 @@ impl FileAst {
     pub fn parse(language: AstLanguage, source: &str) -> Result<Self> {
         match language {
             AstLanguage::Rust => parse_rust_ast(source),
+            AstLanguage::Python => parse_python_ast(source),
         }
     }
 
@@ -140,6 +143,7 @@ impl AstLocationRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AstItemKind {
     Function,
+    Class,
     Struct,
     Enum,
     Union,
@@ -155,7 +159,8 @@ impl AstItemKind {
     fn supports_type_bodies(self) -> bool {
         matches!(
             self,
-            AstItemKind::Struct
+            AstItemKind::Class
+                | AstItemKind::Struct
                 | AstItemKind::Enum
                 | AstItemKind::Union
                 | AstItemKind::TypeAlias
@@ -245,10 +250,43 @@ fn parse_rust_ast(source: &str) -> Result<FileAst> {
     })
 }
 
+fn parse_python_ast(source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+    parser
+        .set_language(&language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: "python",
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: "python",
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let docs = PythonDocContext { source };
+
+    Ok(FileAst {
+        language: AstLanguage::Python,
+        root_docs: docs.root_module_docs(root),
+        items: collect_python_supported_items(root, &docs),
+        has_errors: root.has_error(),
+    })
+}
+
 fn collect_supported_items(node: Node<'_>, docs: &RustDocContext<'_>) -> Vec<AstItem> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter_map(|child| parse_item(child, docs))
+        .collect()
+}
+
+fn collect_python_supported_items(node: Node<'_>, docs: &PythonDocContext<'_>) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter_map(|child| parse_python_item(child, docs))
         .collect()
 }
 
@@ -273,6 +311,27 @@ fn parse_item(node: Node<'_>, docs: &RustDocContext<'_>) -> Option<AstItem> {
     }
 }
 
+fn parse_python_item(node: Node<'_>, docs: &PythonDocContext<'_>) -> Option<AstItem> {
+    match node.kind() {
+        "function_definition" => Some(parse_python_function_item(node, node, docs)),
+        "class_definition" => Some(parse_python_class_item(node, node, docs)),
+        "decorated_definition" => parse_python_decorated_item(node, docs),
+        _ => None,
+    }
+}
+
+fn parse_python_decorated_item(node: Node<'_>, docs: &PythonDocContext<'_>) -> Option<AstItem> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "function_definition" => return Some(parse_python_function_item(node, child, docs)),
+            "class_definition" => return Some(parse_python_class_item(node, child, docs)),
+            _ => {}
+        }
+    }
+    None
+}
+
 fn parse_function_item(node: Node<'_>, docs: &RustDocContext<'_>) -> AstItem {
     let source = docs.source;
     let name =
@@ -287,6 +346,59 @@ fn parse_function_item(node: Node<'_>, docs: &RustDocContext<'_>) -> AstItem {
         signature: Some(signature_text(node, source)),
         body: Some(trimmed_node_text(node, source)),
         children: Vec::new(),
+    }
+}
+
+fn parse_python_function_item(
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &PythonDocContext<'_>,
+) -> AstItem {
+    let source = docs.source;
+    let name = child_text_by_field(definition_node, "name", source)
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = definition_node.child_by_field_name("body");
+    let is_async = signature_text(definition_node, source).starts_with("async def ");
+    AstItem {
+        kind: AstItemKind::Function,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: body.and_then(|body| docs.docstring_for_body(body)),
+        summary: if is_async {
+            format!("async def {name}")
+        } else {
+            format!("def {name}")
+        },
+        signature: Some(signature_text_with_body(render_node, body, source)),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: body
+            .map(|body| collect_python_supported_items(body, docs))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_python_class_item(
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &PythonDocContext<'_>,
+) -> AstItem {
+    let source = docs.source;
+    let name = child_text_by_field(definition_node, "name", source)
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = definition_node.child_by_field_name("body");
+    AstItem {
+        kind: AstItemKind::Class,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: body.and_then(|body| docs.docstring_for_body(body)),
+        summary: format!("class {name}"),
+        signature: Some(signature_text_with_body(render_node, body, source)),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: body
+            .map(|body| collect_python_supported_items(body, docs))
+            .unwrap_or_default(),
     }
 }
 
@@ -538,6 +650,22 @@ impl<'a> RustDocContext<'a> {
     }
 }
 
+struct PythonDocContext<'a> {
+    source: &'a str,
+}
+
+impl<'a> PythonDocContext<'a> {
+    fn root_module_docs(&self, root: Node<'_>) -> Option<String> {
+        self.docstring_for_body(root)
+    }
+
+    fn docstring_for_body(&self, body: Node<'_>) -> Option<String> {
+        let mut cursor = body.walk();
+        let first_statement = body.named_children(&mut cursor).next()?;
+        extract_python_docstring(first_statement, self.source)
+    }
+}
+
 fn is_rust_outer_doc_line_comment(line: &str) -> bool {
     line.starts_with("///") && !line.starts_with("////")
 }
@@ -555,7 +683,11 @@ fn is_doc_block_end_candidate(line: &str) -> bool {
 }
 
 fn signature_text(node: Node<'_>, source: &str) -> String {
-    if let Some(body) = node.child_by_field_name("body") {
+    signature_text_with_body(node, node.child_by_field_name("body"), source)
+}
+
+fn signature_text_with_body(node: Node<'_>, body: Option<Node<'_>>, source: &str) -> String {
+    if let Some(body) = body {
         return source_fragment(source, node.start_byte(), body.start_byte());
     }
     trimmed_node_text(node, source)
@@ -580,6 +712,24 @@ fn trimmed_text(source: &str, start: usize, end: usize) -> String {
 
 fn location_for_node(node: Node<'_>) -> AstLocationRange {
     AstLocationRange::from_points(node.start_position(), node.end_position())
+}
+
+fn extract_python_docstring(node: Node<'_>, source: &str) -> Option<String> {
+    if node.kind() != "expression_statement" {
+        return None;
+    }
+
+    let mut cursor = node.walk();
+    let value = node.named_children(&mut cursor).next()?;
+    if !is_python_string_literal(value) {
+        return None;
+    }
+
+    Some(trimmed_node_text(value, source))
+}
+
+fn is_python_string_literal(node: Node<'_>) -> bool {
+    matches!(node.kind(), "string" | "concatenated_string")
 }
 
 fn extract_type_name(target: &str) -> Option<String> {
@@ -678,7 +828,8 @@ fn item_matches_selector(
 fn item_supports_type_selection(item: &AstItem) -> bool {
     matches!(
         item.kind,
-        AstItemKind::Struct
+        AstItemKind::Class
+            | AstItemKind::Struct
             | AstItemKind::Enum
             | AstItemKind::Union
             | AstItemKind::TypeAlias
@@ -847,6 +998,25 @@ impl S {
 }
 "#;
 
+    const PYTHON_SAMPLE: &str = r#"
+"""module docs"""
+
+class Greeter:
+    """class docs"""
+
+    def greet(self, name: str) -> str:
+        """method docs"""
+
+        def normalize(value):
+            return value.strip()
+
+        return normalize(name)
+
+@cached
+async def run(task):
+    return task()
+"#;
+
     #[test]
     fn renders_basic_rust_outline() {
         let ast = FileAst::parse(AstLanguage::Rust, SAMPLE).unwrap();
@@ -1000,5 +1170,87 @@ impl S {
             }),
             "//! crate docs\n/// struct docs\nstruct S"
         );
+    }
+
+    #[test]
+    fn parses_python_file_paths() {
+        assert_eq!(
+            AstLanguage::from_path(Path::new("example.py")),
+            Some(AstLanguage::Python)
+        );
+    }
+
+    #[test]
+    fn renders_basic_python_outline() {
+        let ast = FileAst::parse(AstLanguage::Python, PYTHON_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions::default()),
+            "class Greeter\n> def greet\n>> def normalize\nasync def run"
+        );
+    }
+
+    #[test]
+    fn renders_python_signatures_and_docs() {
+        let ast = FileAst::parse(AstLanguage::Python, PYTHON_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_signatures: true,
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "\"\"\"module docs\"\"\"\n\"\"\"class docs\"\"\"\nclass Greeter:\n> \"\"\"method docs\"\"\"\n> def greet(self, name: str) -> str:\n>> def normalize(value):\n@cached\nasync def run(task):"
+        );
+    }
+
+    #[test]
+    fn renders_python_type_and_function_bodies_when_requested() {
+        let ast = FileAst::parse(AstLanguage::Python, PYTHON_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_signatures: true,
+                include_type_bodies: true,
+                include_function_bodies: true,
+                include_docs: false,
+                include_locations: false,
+            }),
+            "class Greeter:\n    \"\"\"class docs\"\"\"\n\n    def greet(self, name: str) -> str:\n        \"\"\"method docs\"\"\"\n\n        def normalize(value):\n            return value.strip()\n\n        return normalize(name)\n@cached\nasync def run(task):\n    return task()"
+        );
+    }
+
+    #[test]
+    fn selects_python_nested_items_by_glob_path() {
+        let ast = FileAst::parse(AstLanguage::Python, PYTHON_SAMPLE).unwrap();
+
+        let rendered = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Greeter.greet.*".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap();
+
+        assert_eq!(rendered, "def normalize");
+    }
+
+    #[test]
+    fn selects_python_type_and_methods() {
+        let ast = FileAst::parse(AstLanguage::Python, PYTHON_SAMPLE).unwrap();
+
+        let rendered = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: Vec::new(),
+                    type_patterns: vec!["Greeter".to_owned()],
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap();
+
+        assert_eq!(rendered, "class Greeter\n> def greet\n>> def normalize");
     }
 }
