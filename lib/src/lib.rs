@@ -1,20 +1,11 @@
-#[path = "../../src/edit/mod.rs"]
 pub mod edit;
-#[path = "../../src/error.rs"]
 pub mod error;
-#[path = "../../src/executor.rs"]
 pub mod executor;
-#[path = "../../src/file_ast.rs"]
 pub mod file_ast;
-#[path = "../../src/fs.rs"]
 pub mod fs;
-#[path = "../../src/parser.rs"]
 pub mod parser;
-#[path = "../../src/plan.rs"]
 pub mod plan;
-#[path = "../../src/span.rs"]
 pub mod span;
-
 pub use edit::{
     EditProgram, FileInsertion, FilePatternMatch, FileRangeSelection, GenericModification,
     LanguageModification, Modification, PathDestination, PathDestinationKind, PathSpec,
