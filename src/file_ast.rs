@@ -27,7 +27,7 @@ impl AstLanguage {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AstRenderOptions {
     pub include_signatures: bool,
     pub include_type_bodies: bool,
@@ -39,18 +39,6 @@ pub struct AstRenderOptions {
 impl AstRenderOptions {
     pub fn basic() -> Self {
         Self::default()
-    }
-}
-
-impl Default for AstRenderOptions {
-    fn default() -> Self {
-        Self {
-            include_signatures: false,
-            include_type_bodies: false,
-            include_function_bodies: false,
-            include_docs: false,
-            include_locations: false,
-        }
     }
 }
 
@@ -102,10 +90,10 @@ impl FileAst {
 
     fn render_items(&self, items: &[AstItem], options: AstRenderOptions) -> String {
         let mut rendered = String::new();
-        if options.include_docs {
-            if let Some(root_docs) = self.root_docs.as_deref() {
-                push_indented_block(&mut rendered, 0, root_docs, None);
-            }
+        if options.include_docs
+            && let Some(root_docs) = self.root_docs.as_deref()
+        {
+            push_indented_block(&mut rendered, 0, root_docs, None);
         }
         for (index, item) in items.iter().enumerate() {
             if !rendered.is_empty() || index > 0 {
@@ -1555,11 +1543,11 @@ fn render_item(item: &AstItem, options: AstRenderOptions, indent: usize, output:
         &item.summary
     };
 
-    if options.include_docs {
-        if let Some(docs) = item.docs.as_deref() {
-            push_indented_block(output, indent, docs, None);
-            output.push('\n');
-        }
+    if options.include_docs
+        && let Some(docs) = item.docs.as_deref()
+    {
+        push_indented_block(output, indent, docs, None);
+        output.push('\n');
     }
 
     push_indented_block(

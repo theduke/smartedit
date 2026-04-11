@@ -57,6 +57,13 @@ struct PendingTextUpdates {
     files: BTreeMap<PathBuf, PendingTextFileUpdate>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TextInsertionTarget<'a> {
+    path: &'a Path,
+    offset: usize,
+    create_if_missing: bool,
+}
+
 #[derive(Debug, Clone)]
 enum SnapshotEntry {
     File(Vec<u8>),
@@ -212,13 +219,16 @@ where
                     create_destination_if_missing,
                     ..
                 }) => {
+                    let destination = TextInsertionTarget {
+                        path: destination.path.as_path(),
+                        offset: destination.offset,
+                        create_if_missing: *create_destination_if_missing,
+                    };
                     self.plan_move_ranges_into(
                         modification_index,
                         source.path.as_path(),
                         &source.ranges,
-                        destination.path.as_path(),
-                        destination.offset,
-                        *create_destination_if_missing,
+                        destination,
                         &mut pending_text_updates,
                         snapshot,
                     )?;
@@ -229,12 +239,15 @@ where
                     create_destination_if_missing,
                     ..
                 }) => {
+                    let destination = TextInsertionTarget {
+                        path: target.path.as_path(),
+                        offset: target.offset,
+                        create_if_missing: *create_destination_if_missing,
+                    };
                     self.plan_insert_lines_into(
                         modification_index,
-                        target.path.as_path(),
-                        target.offset,
+                        destination,
                         content,
-                        *create_destination_if_missing,
                         &mut pending_text_updates,
                         snapshot,
                     )?;
@@ -478,9 +491,7 @@ where
         modification_index: usize,
         source_path: &Path,
         ranges: &RangeSet,
-        destination_path: &Path,
-        destination_offset: usize,
-        create_destination_if_missing: bool,
+        destination: TextInsertionTarget<'_>,
         pending: &mut PendingTextUpdates,
         snapshot: &SnapshotState,
     ) -> Result<()> {
@@ -510,15 +521,15 @@ where
 
         let destination_update = self.get_or_load_text_update(
             modification_index,
-            destination_path,
-            create_destination_if_missing,
+            destination.path,
+            destination.create_if_missing,
             pending,
             snapshot,
         )?;
         let destination_offset = resolve_insertion_offset(
-            destination_path,
+            destination.path,
             &destination_update.original_content,
-            destination_offset,
+            destination.offset,
         )?;
         destination_update.insertions.push(PendingTextInsertion {
             offset: destination_offset,
@@ -531,24 +542,22 @@ where
     fn plan_insert_lines_into(
         &self,
         modification_index: usize,
-        destination_path: &Path,
-        destination_offset: usize,
+        destination: TextInsertionTarget<'_>,
         content: &str,
-        create_destination_if_missing: bool,
         pending: &mut PendingTextUpdates,
         snapshot: &SnapshotState,
     ) -> Result<()> {
         let destination_update = self.get_or_load_text_update(
             modification_index,
-            destination_path,
-            create_destination_if_missing,
+            destination.path,
+            destination.create_if_missing,
             pending,
             snapshot,
         )?;
         let destination_offset = resolve_insertion_offset(
-            destination_path,
+            destination.path,
             &destination_update.original_content,
-            destination_offset,
+            destination.offset,
         )?;
         destination_update.insertions.push(PendingTextInsertion {
             offset: destination_offset,
@@ -906,11 +915,11 @@ where
 
         let mut coalesced: Vec<crate::edit::TextRange> = Vec::with_capacity(merged.len());
         for range in merged {
-            if let Some(last) = coalesced.last_mut() {
-                if range.start <= last.end {
-                    last.end = last.end.max(range.end);
-                    continue;
-                }
+            if let Some(last) = coalesced.last_mut()
+                && range.start <= last.end
+            {
+                last.end = last.end.max(range.end);
+                continue;
             }
             coalesced.push(range);
         }
