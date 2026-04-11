@@ -2,5 +2,5 @@ help:
     just --list
 
 install:
-    cargo install --path .
+    cargo install --force --path .
     smartedit install-skill --user
