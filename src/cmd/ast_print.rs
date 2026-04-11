@@ -351,11 +351,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_inputs_includes_python_files() {
-        let dir = TestDir::new("python-direct");
+    fn resolve_inputs_include_supported_non_rust_files() {
+        let dir = TestDir::new("multi-language-direct");
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/keep.rs"), "fn keep() {}\n").unwrap();
         fs::write(dir.path().join("src/tool.py"), "def run():\n    pass\n").unwrap();
+        fs::write(dir.path().join("src/tool.js"), "export function run() {}\n").unwrap();
+        fs::write(
+            dir.path().join("src/tool.ts"),
+            "export function run(): void {}\n",
+        )
+        .unwrap();
 
         let resolved = resolve_ast_inputs(&["src/**/*".to_owned()], dir.path(), false).unwrap();
 
@@ -363,7 +369,9 @@ mod tests {
             resolved.supported_files,
             vec![
                 dir.path().join("src/keep.rs"),
-                dir.path().join("src/tool.py")
+                dir.path().join("src/tool.js"),
+                dir.path().join("src/tool.py"),
+                dir.path().join("src/tool.ts")
             ]
         );
     }

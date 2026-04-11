@@ -9,6 +9,9 @@ use crate::error::{Result, SmartEditError};
 pub enum AstLanguage {
     Rust,
     Python,
+    JavaScript,
+    TypeScript,
+    Tsx,
 }
 
 impl AstLanguage {
@@ -16,6 +19,9 @@ impl AstLanguage {
         match path.extension().and_then(|ext| ext.to_str()) {
             Some("rs") => Some(Self::Rust),
             Some("py") => Some(Self::Python),
+            Some("js") | Some("mjs") | Some("cjs") | Some("jsx") => Some(Self::JavaScript),
+            Some("ts") | Some("mts") | Some("cts") => Some(Self::TypeScript),
+            Some("tsx") => Some(Self::Tsx),
             _ => None,
         }
     }
@@ -61,6 +67,9 @@ impl FileAst {
         match language {
             AstLanguage::Rust => parse_rust_ast(source),
             AstLanguage::Python => parse_python_ast(source),
+            AstLanguage::JavaScript | AstLanguage::TypeScript | AstLanguage::Tsx => {
+                parse_js_like_ast(language, source)
+            }
         }
     }
 
@@ -144,6 +153,7 @@ impl AstLocationRange {
 pub enum AstItemKind {
     Function,
     Class,
+    Interface,
     Struct,
     Enum,
     Union,
@@ -160,6 +170,7 @@ impl AstItemKind {
         matches!(
             self,
             AstItemKind::Class
+                | AstItemKind::Interface
                 | AstItemKind::Struct
                 | AstItemKind::Enum
                 | AstItemKind::Union
@@ -276,6 +287,49 @@ fn parse_python_ast(source: &str) -> Result<FileAst> {
     })
 }
 
+fn parse_js_like_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let (tree_sitter_language, language_name, flavor) = match language {
+        AstLanguage::JavaScript => (
+            tree_sitter_javascript::LANGUAGE.into(),
+            "javascript",
+            JsLikeFlavor::JavaScript,
+        ),
+        AstLanguage::TypeScript => (
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "typescript",
+            JsLikeFlavor::TypeScript,
+        ),
+        AstLanguage::Tsx => (
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            "tsx",
+            JsLikeFlavor::TypeScript,
+        ),
+        AstLanguage::Rust | AstLanguage::Python => unreachable!(),
+    };
+    parser
+        .set_language(&tree_sitter_language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: language_name,
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: language_name,
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let docs = JsDocContext::new(source);
+
+    Ok(FileAst {
+        language,
+        root_docs: docs.root_module_docs(),
+        items: collect_js_like_supported_items(root, &docs, flavor),
+        has_errors: root.has_error(),
+    })
+}
+
 fn collect_supported_items(node: Node<'_>, docs: &RustDocContext<'_>) -> Vec<AstItem> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
@@ -288,6 +342,19 @@ fn collect_python_supported_items(node: Node<'_>, docs: &PythonDocContext<'_>) -
     node.named_children(&mut cursor)
         .filter_map(|child| parse_python_item(child, docs))
         .collect()
+}
+
+fn collect_js_like_supported_items(
+    node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    let mut items = Vec::new();
+    for child in node.named_children(&mut cursor) {
+        items.extend(parse_js_like_items(child, docs, flavor));
+    }
+    items
 }
 
 fn parse_item(node: Node<'_>, docs: &RustDocContext<'_>) -> Option<AstItem> {
@@ -399,6 +466,394 @@ fn parse_python_class_item(
         children: body
             .map(|body| collect_python_supported_items(body, docs))
             .unwrap_or_default(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsLikeFlavor {
+    JavaScript,
+    TypeScript,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JsLikeFunctionKind {
+    Function,
+    Method,
+}
+
+fn parse_js_like_items(
+    node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Vec<AstItem> {
+    match node.kind() {
+        "class_declaration" | "abstract_class_declaration" => {
+            vec![parse_js_class_item(node, node, docs, flavor, None)]
+        }
+        "function_declaration" | "generator_function_declaration" => {
+            vec![parse_js_function_item(
+                JsLikeFunctionKind::Function,
+                node,
+                node,
+                docs,
+                flavor,
+                None,
+            )]
+        }
+        "method_definition" | "method_signature" | "abstract_method_signature" => {
+            vec![parse_js_function_item(
+                JsLikeFunctionKind::Method,
+                node,
+                node,
+                docs,
+                flavor,
+                None,
+            )]
+        }
+        "lexical_declaration" | "variable_declaration" => {
+            parse_js_variable_declaration_items(node, node, docs, flavor)
+        }
+        "export_statement" => parse_js_export_items(node, docs, flavor),
+        "expression_statement" => parse_js_expression_statement_items(node, docs, flavor),
+        "interface_declaration" if flavor == JsLikeFlavor::TypeScript => {
+            vec![parse_js_interface_item(node, node, docs, flavor)]
+        }
+        "enum_declaration" if flavor == JsLikeFlavor::TypeScript => {
+            vec![parse_js_simple_item(
+                AstItemKind::Enum,
+                "enum",
+                node,
+                node,
+                docs,
+                None,
+            )]
+        }
+        "type_alias_declaration" if flavor == JsLikeFlavor::TypeScript => {
+            vec![parse_js_simple_item(
+                AstItemKind::TypeAlias,
+                "type",
+                node,
+                node,
+                docs,
+                None,
+            )]
+        }
+        "module" | "internal_module" if flavor == JsLikeFlavor::TypeScript => {
+            vec![parse_js_module_item(node, node, docs, flavor)]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn parse_js_export_items(
+    node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Vec<AstItem> {
+    if let Some(declaration) = node.child_by_field_name("declaration") {
+        return match declaration.kind() {
+            "class_declaration" | "abstract_class_declaration" => {
+                vec![parse_js_class_item(node, declaration, docs, flavor, None)]
+            }
+            "function_declaration" | "generator_function_declaration" => {
+                vec![parse_js_function_item(
+                    JsLikeFunctionKind::Function,
+                    node,
+                    declaration,
+                    docs,
+                    flavor,
+                    None,
+                )]
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                parse_js_variable_declaration_items(node, declaration, docs, flavor)
+            }
+            "interface_declaration" if flavor == JsLikeFlavor::TypeScript => {
+                vec![parse_js_interface_item(node, declaration, docs, flavor)]
+            }
+            "enum_declaration" if flavor == JsLikeFlavor::TypeScript => {
+                vec![parse_js_simple_item(
+                    AstItemKind::Enum,
+                    "enum",
+                    node,
+                    declaration,
+                    docs,
+                    None,
+                )]
+            }
+            "type_alias_declaration" if flavor == JsLikeFlavor::TypeScript => {
+                vec![parse_js_simple_item(
+                    AstItemKind::TypeAlias,
+                    "type",
+                    node,
+                    declaration,
+                    docs,
+                    None,
+                )]
+            }
+            "module" | "internal_module" if flavor == JsLikeFlavor::TypeScript => {
+                vec![parse_js_module_item(node, declaration, docs, flavor)]
+            }
+            _ => Vec::new(),
+        };
+    }
+
+    if let Some(value) = node.child_by_field_name("value") {
+        return parse_js_assignment_like_item(node, value, docs, flavor)
+            .into_iter()
+            .collect();
+    }
+
+    Vec::new()
+}
+
+fn parse_js_expression_statement_items(
+    node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    let Some(value) = node.named_children(&mut cursor).next() else {
+        return Vec::new();
+    };
+    parse_js_assignment_like_item(node, value, docs, flavor)
+        .into_iter()
+        .collect()
+}
+
+fn parse_js_assignment_like_item(
+    render_node: Node<'_>,
+    value: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Option<AstItem> {
+    if value.kind() != "assignment_expression" {
+        return None;
+    }
+    let source = docs.source;
+    let name = assignment_target_name(value, source)?;
+    let definition = value.child_by_field_name("right")?;
+    match definition.kind() {
+        "arrow_function" | "function_expression" | "generator_function" => {
+            Some(parse_js_function_item(
+                JsLikeFunctionKind::Function,
+                render_node,
+                definition,
+                docs,
+                flavor,
+                Some(name),
+            ))
+        }
+        "class" => Some(parse_js_class_item(
+            render_node,
+            definition,
+            docs,
+            flavor,
+            Some(name),
+        )),
+        _ => None,
+    }
+}
+
+fn parse_js_variable_declaration_items(
+    render_node: Node<'_>,
+    declaration_node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Vec<AstItem> {
+    let mut cursor = declaration_node.walk();
+    let declarators: Vec<_> = declaration_node
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() == "variable_declarator")
+        .collect();
+    let use_declaration_span = declarators.len() == 1;
+
+    declarators
+        .into_iter()
+        .filter_map(|declarator| {
+            let item_render_node = if use_declaration_span {
+                render_node
+            } else {
+                declarator
+            };
+            parse_js_variable_declarator_item(item_render_node, declarator, docs, flavor)
+        })
+        .collect()
+}
+
+fn parse_js_variable_declarator_item(
+    render_node: Node<'_>,
+    declarator: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> Option<AstItem> {
+    let source = docs.source;
+    let name = match declarator.child_by_field_name("name") {
+        Some(name) if name.kind() == "identifier" => trimmed_node_text(name, source),
+        _ => return None,
+    };
+    let value = declarator.child_by_field_name("value")?;
+    match value.kind() {
+        "arrow_function" | "function_expression" | "generator_function" => {
+            Some(parse_js_function_item(
+                JsLikeFunctionKind::Function,
+                render_node,
+                value,
+                docs,
+                flavor,
+                Some(name),
+            ))
+        }
+        "class" => Some(parse_js_class_item(
+            render_node,
+            value,
+            docs,
+            flavor,
+            Some(name),
+        )),
+        _ => None,
+    }
+}
+
+fn parse_js_function_item(
+    kind: JsLikeFunctionKind,
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+    name_override: Option<String>,
+) -> AstItem {
+    let source = docs.source;
+    let name = name_override.unwrap_or_else(|| {
+        child_text_by_field(definition_node, "name", source)
+            .unwrap_or_else(|| "<anonymous>".to_owned())
+    });
+    let body = definition_node.child_by_field_name("body");
+    let signature = signature_text_with_body(render_node, body, source);
+    AstItem {
+        kind: AstItemKind::Function,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: docs.leading_item_docs(render_node),
+        summary: summarize_js_function(kind, &name, &signature),
+        signature: Some(signature),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: body
+            .filter(|body| body.kind() == "statement_block")
+            .map(|body| collect_js_like_supported_items(body, docs, flavor))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_js_class_item(
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+    name_override: Option<String>,
+) -> AstItem {
+    let source = docs.source;
+    let name = name_override.unwrap_or_else(|| {
+        child_text_by_field(definition_node, "name", source)
+            .unwrap_or_else(|| "<anonymous>".to_owned())
+    });
+    let body = definition_node.child_by_field_name("body");
+    AstItem {
+        kind: AstItemKind::Class,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: docs.leading_item_docs(render_node),
+        summary: summarize_js_class(&name, render_node, source),
+        signature: Some(signature_text_with_body(render_node, body, source)),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: body
+            .map(|body| collect_js_like_supported_items(body, docs, flavor))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_js_interface_item(
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> AstItem {
+    let source = docs.source;
+    let name = child_text_by_field(definition_node, "name", source)
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = definition_node.child_by_field_name("body");
+    AstItem {
+        kind: AstItemKind::Interface,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: docs.leading_item_docs(render_node),
+        summary: format!("interface {name}"),
+        signature: Some(signature_text_with_body(render_node, body, source)),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: body
+            .map(|body| collect_js_like_supported_items(body, docs, flavor))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_js_module_item(
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    flavor: JsLikeFlavor,
+) -> AstItem {
+    let source = docs.source;
+    let name = child_text_by_field(definition_node, "name", source)
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = definition_node.child_by_field_name("body");
+    let signature = signature_text_with_body(render_node, body, source);
+    let keyword = if signature.starts_with("namespace ") {
+        "namespace"
+    } else {
+        "module"
+    };
+    AstItem {
+        kind: AstItemKind::Module,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: docs.leading_item_docs(render_node),
+        summary: format!("{keyword} {name}"),
+        signature: Some(signature),
+        body: None,
+        children: body
+            .map(|body| collect_js_like_supported_items(body, docs, flavor))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_js_simple_item(
+    kind: AstItemKind,
+    keyword: &str,
+    render_node: Node<'_>,
+    definition_node: Node<'_>,
+    docs: &JsDocContext<'_>,
+    name_override: Option<String>,
+) -> AstItem {
+    let source = docs.source;
+    let name = name_override.unwrap_or_else(|| {
+        child_text_by_field(definition_node, "name", source)
+            .unwrap_or_else(|| "<anonymous>".to_owned())
+    });
+    let body = definition_node.child_by_field_name("body");
+    AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: docs.leading_item_docs(render_node),
+        summary: format!("{keyword} {name}"),
+        signature: Some(signature_text_with_body(render_node, body, source)),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: Vec::new(),
     }
 }
 
@@ -562,6 +1017,7 @@ impl<'a> RustDocContext<'a> {
         }
 
         let end_row = start_row - 1;
+        let mut docs_end_row = end_row;
         let mut row = end_row;
         let mut start_row = None;
 
@@ -569,6 +1025,14 @@ impl<'a> RustDocContext<'a> {
             let line = self.line_text(row).trim();
             if line.is_empty() {
                 break;
+            }
+            if line.starts_with("#[") {
+                if row == 0 {
+                    return None;
+                }
+                docs_end_row = row - 1;
+                row -= 1;
+                continue;
             }
             if is_rust_outer_doc_line_comment(line) {
                 start_row = Some(row);
@@ -586,7 +1050,7 @@ impl<'a> RustDocContext<'a> {
             row -= 1;
         }
 
-        start_row.map(|start_row| self.rows_text(start_row, end_row))
+        start_row.map(|start_row| self.rows_text(start_row, docs_end_row))
     }
 
     fn scan_outer_doc_block_start(&self, mut row: usize) -> Option<usize> {
@@ -666,6 +1130,154 @@ impl<'a> PythonDocContext<'a> {
     }
 }
 
+struct JsDocContext<'a> {
+    source: &'a str,
+    line_starts: Vec<usize>,
+}
+
+impl<'a> JsDocContext<'a> {
+    fn new(source: &'a str) -> Self {
+        let mut line_starts = vec![0];
+        for (index, byte) in source.bytes().enumerate() {
+            if byte == b'\n' {
+                line_starts.push(index + 1);
+            }
+        }
+        Self {
+            source,
+            line_starts,
+        }
+    }
+
+    fn root_module_docs(&self) -> Option<String> {
+        let mut row = 0;
+        let mut start_row = None;
+        let mut end_row = None;
+        while row < self.line_starts.len() {
+            let line = self.line_text(row).trim();
+            if row == 0 && line.starts_with("#!") {
+                row += 1;
+                continue;
+            }
+            if line.is_empty() {
+                if end_row.is_some() {
+                    break;
+                }
+                row += 1;
+                continue;
+            }
+            if is_js_line_comment(line) {
+                start_row.get_or_insert(row);
+                end_row = Some(row);
+                row += 1;
+                continue;
+            }
+            if is_js_block_comment_start(line) {
+                start_row.get_or_insert(row);
+                let end = self.scan_js_block_comment_end(row)?;
+                end_row = Some(end);
+                row = end + 1;
+                continue;
+            }
+            break;
+        }
+        start_row
+            .zip(end_row)
+            .map(|(start_row, end_row)| self.rows_text(start_row, end_row))
+    }
+
+    fn leading_item_docs(&self, node: Node<'_>) -> Option<String> {
+        let start_row = node.start_position().row;
+        if start_row == 0 {
+            return None;
+        }
+
+        let end_row = start_row - 1;
+        let mut row = end_row;
+        let mut start_row = None;
+
+        loop {
+            let line = self.line_text(row).trim();
+            if line.is_empty() {
+                break;
+            }
+            if is_js_line_comment(line) {
+                start_row = Some(row);
+            } else if is_js_block_comment_end_candidate(line) {
+                let block_start = self.scan_js_block_comment_start(row)?;
+                start_row = Some(block_start);
+                row = block_start;
+            } else {
+                break;
+            }
+
+            if row == 0 {
+                break;
+            }
+            row -= 1;
+        }
+
+        start_row.map(|start_row| self.rows_text(start_row, end_row))
+    }
+
+    fn scan_js_block_comment_start(&self, mut row: usize) -> Option<usize> {
+        loop {
+            let line = self.line_text(row).trim();
+            if is_js_block_comment_start(line) {
+                return Some(row);
+            }
+            if row == 0 {
+                return None;
+            }
+            row -= 1;
+        }
+    }
+
+    fn scan_js_block_comment_end(&self, mut row: usize) -> Option<usize> {
+        loop {
+            let line = self.line_text(row).trim();
+            if line.contains("*/") {
+                return Some(row);
+            }
+            row += 1;
+            if row >= self.line_starts.len() {
+                return None;
+            }
+        }
+    }
+
+    fn rows_text(&self, start_row: usize, end_row: usize) -> String {
+        let start = self.line_start(start_row);
+        let end = self.line_end(end_row);
+        self.source[start..end].trim().to_owned()
+    }
+
+    fn line_text(&self, row: usize) -> &'a str {
+        let start = self.line_start(row);
+        let end = self.line_end(row);
+        &self.source[start..end]
+    }
+
+    fn line_start(&self, row: usize) -> usize {
+        self.line_starts[row]
+    }
+
+    fn line_end(&self, row: usize) -> usize {
+        let mut end = self
+            .line_starts
+            .get(row + 1)
+            .copied()
+            .unwrap_or(self.source.len());
+        if end > 0 && self.source.as_bytes()[end - 1] == b'\n' {
+            end -= 1;
+        }
+        if end > 0 && self.source.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
+        }
+        end
+    }
+}
+
 fn is_rust_outer_doc_line_comment(line: &str) -> bool {
     line.starts_with("///") && !line.starts_with("////")
 }
@@ -680,6 +1292,65 @@ fn is_doc_block_start(line: &str) -> bool {
 
 fn is_doc_block_end_candidate(line: &str) -> bool {
     line.ends_with("*/")
+}
+
+fn is_js_line_comment(line: &str) -> bool {
+    line.starts_with("//")
+}
+
+fn is_js_block_comment_start(line: &str) -> bool {
+    line.starts_with("/*")
+}
+
+fn is_js_block_comment_end_candidate(line: &str) -> bool {
+    line.contains("*/")
+}
+
+fn assignment_target_name(node: Node<'_>, source: &str) -> Option<String> {
+    let left = node.child_by_field_name("left")?;
+    match left.kind() {
+        "identifier" | "property_identifier" | "private_property_identifier" => {
+            Some(trimmed_node_text(left, source))
+        }
+        "member_expression" => left
+            .child_by_field_name("property")
+            .map(|property| trimmed_node_text(property, source)),
+        _ => None,
+    }
+}
+
+fn summarize_js_class(name: &str, render_node: Node<'_>, source: &str) -> String {
+    let summary = if trimmed_node_text(render_node, source).starts_with("abstract class ") {
+        "abstract class"
+    } else {
+        "class"
+    };
+    format!("{summary} {name}")
+}
+
+fn summarize_js_function(kind: JsLikeFunctionKind, name: &str, signature: &str) -> String {
+    let trimmed = signature.trim_start();
+    let prefix = match kind {
+        JsLikeFunctionKind::Function => {
+            if trimmed.contains("async ") || trimmed.starts_with("async") {
+                "async function"
+            } else if trimmed.contains("function*") || trimmed.contains("*") {
+                "function*"
+            } else {
+                "function"
+            }
+        }
+        JsLikeFunctionKind::Method => {
+            if trimmed.contains("async ") || trimmed.starts_with("async") {
+                "async method"
+            } else if trimmed.starts_with('*') {
+                "method*"
+            } else {
+                "method"
+            }
+        }
+    };
+    format!("{prefix} {name}")
 }
 
 fn signature_text(node: Node<'_>, source: &str) -> String {
@@ -829,6 +1500,7 @@ fn item_supports_type_selection(item: &AstItem) -> bool {
     matches!(
         item.kind,
         AstItemKind::Class
+            | AstItemKind::Interface
             | AstItemKind::Struct
             | AstItemKind::Enum
             | AstItemKind::Union
@@ -946,6 +1618,13 @@ fn normalize_indentation(text: &str) -> String {
     if lines.len() <= 1 {
         return text.to_owned();
     }
+    if lines
+        .first()
+        .map(|line| line.trim_end().ends_with(':'))
+        .unwrap_or(false)
+    {
+        return text.to_owned();
+    }
 
     let shared_indent = lines
         .iter()
@@ -975,6 +1654,8 @@ fn normalize_indentation(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{AstLanguage, AstRenderOptions, AstSelector, FileAst};
 
     const SAMPLE: &str = r#"
@@ -1015,6 +1696,49 @@ class Greeter:
 @cached
 async def run(task):
     return task()
+"#;
+
+    const JAVASCRIPT_SAMPLE: &str = r#"
+/** module docs */
+
+/** class docs */
+class Greeter {
+    /** method docs */
+    greet(name) {
+        function normalize(value) {
+            return value.trim();
+        }
+
+        return normalize(name);
+    }
+}
+
+export const run = async (task) => {
+    return task();
+};
+"#;
+
+    const TYPESCRIPT_SAMPLE: &str = r#"
+/** module docs */
+
+/** interface docs */
+export interface Greeter {
+    /** method docs */
+    greet(name: string): string;
+}
+
+export class Service {
+    run(task: string): string {
+        const normalize = (value: string) => value.trim();
+        return normalize(task);
+    }
+}
+
+export type Task = { id: string };
+export enum Mode {
+    Dev,
+    Prod,
+}
 "#;
 
     #[test]
@@ -1181,6 +1905,26 @@ async def run(task):
     }
 
     #[test]
+    fn parses_javascript_and_typescript_file_paths() {
+        assert_eq!(
+            AstLanguage::from_path(Path::new("example.js")),
+            Some(AstLanguage::JavaScript)
+        );
+        assert_eq!(
+            AstLanguage::from_path(Path::new("example.jsx")),
+            Some(AstLanguage::JavaScript)
+        );
+        assert_eq!(
+            AstLanguage::from_path(Path::new("example.ts")),
+            Some(AstLanguage::TypeScript)
+        );
+        assert_eq!(
+            AstLanguage::from_path(Path::new("example.tsx")),
+            Some(AstLanguage::Tsx)
+        );
+    }
+
+    #[test]
     fn renders_basic_python_outline() {
         let ast = FileAst::parse(AstLanguage::Python, PYTHON_SAMPLE).unwrap();
 
@@ -1252,5 +1996,90 @@ async def run(task):
             .unwrap();
 
         assert_eq!(rendered, "class Greeter\n> def greet\n>> def normalize");
+    }
+
+    #[test]
+    fn renders_basic_javascript_outline() {
+        let ast = FileAst::parse(AstLanguage::JavaScript, JAVASCRIPT_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions::default()),
+            "class Greeter\n> method greet\n>> function normalize\nasync function run"
+        );
+    }
+
+    #[test]
+    fn renders_javascript_signatures_and_docs() {
+        let ast = FileAst::parse(AstLanguage::JavaScript, JAVASCRIPT_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_signatures: true,
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "/** module docs */\n/** class docs */\nclass Greeter\n> /** method docs */\n> greet(name)\n>> function normalize(value)\nexport const run = async (task) =>"
+        );
+    }
+
+    #[test]
+    fn selects_javascript_nested_items_by_glob_path() {
+        let ast = FileAst::parse(AstLanguage::JavaScript, JAVASCRIPT_SAMPLE).unwrap();
+
+        let rendered = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Greeter.greet.*".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap();
+
+        assert_eq!(rendered, "function normalize");
+    }
+
+    #[test]
+    fn renders_basic_typescript_outline() {
+        let ast = FileAst::parse(AstLanguage::TypeScript, TYPESCRIPT_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions::default()),
+            "interface Greeter\n> method greet\nclass Service\n> method run\n>> function normalize\ntype Task\nenum Mode"
+        );
+    }
+
+    #[test]
+    fn renders_typescript_signatures_and_docs() {
+        let ast = FileAst::parse(AstLanguage::TypeScript, TYPESCRIPT_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_signatures: true,
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "/** module docs */\n/** interface docs */\nexport interface Greeter\n> /** method docs */\n> greet(name: string): string\nexport class Service\n> run(task: string): string\n>> const normalize = (value: string) =>\nexport type Task = { id: string };\nexport enum Mode"
+        );
+    }
+
+    #[test]
+    fn selects_typescript_type_and_members() {
+        let ast = FileAst::parse(AstLanguage::TypeScript, TYPESCRIPT_SAMPLE).unwrap();
+
+        let rendered = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: Vec::new(),
+                    type_patterns: vec!["Service".to_owned()],
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            rendered,
+            "class Service\n> method run\n>> function normalize"
+        );
     }
 }

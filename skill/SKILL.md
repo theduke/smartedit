@@ -1,6 +1,6 @@
 ---
 name: smartedit
-description: Prefer `smartedit ast-print` for Rust or Python exploration and `smartedit apply` for compact edits when working in this repo for token-efficient inspection/modification. Use to inspect outlines, signatures, doc comments/docstrings, item subtrees, type/function bodies, and to apply inline edit programs instead of rewriting whole files, with smarter more token-efficient editing commands.
+description: Prefer `smartedit ast-print` for Rust, Python, JavaScript, or TypeScript exploration and `smartedit apply` for compact edits when working in this repo for token-efficient inspection/modification. Use to inspect outlines, signatures, doc comments/docstrings, item subtrees, type/function bodies, and to apply inline edit programs instead of rewriting whole files, with smarter more token-efficient editing commands.
 ---
 
 # Smartedit First
@@ -10,21 +10,21 @@ description: Prefer `smartedit ast-print` for Rust or Python exploration and `sm
 - Do not spend much time choosing tools.
 - If `smartedit` can plausibly do the job, try it first.
 - Prefer `smartedit` CLI subcommands over generic reads/writes when they fit.
-- Prefer `smartedit ast-print` before reading whole Rust or Python files.
+- Prefer `smartedit ast-print` before reading whole Rust, Python, JavaScript, or TypeScript files.
 - Prefer `smartedit apply` with inline args before writing full-file patches.
 - Try `smartedit` once, then fall back if it is unsupported, awkward, or less clear.
 
 ## `smartedit ast-print`
 
 - Subcommand: `smartedit ast-print [options] <path-or-glob>...`
-- Supported languages: Rust and Python.
+- Supported languages: Rust, Python, JavaScript (including JSX), and TypeScript (including TSX).
 - Use for: outlines, signatures, doc comments/docstrings, type bodies, function bodies, locations, nested item selection, type inspection, multi-file/glob scans.
 - Default to `--loc` when the result may drive an edit.
 - `--loc` is the most important exploration flag for editing: it prints line locations so you can target narrow `smartedit apply` operations instead of rewriting files.
 - Treat `--loc` output as the fast path from exploration to editing. Check the span, then use `ld`, `lr`, or `lm` against that area.
-- `--doc` prints Rust doc comments and Python docstrings. For Rust, it also prints root module `//!` docs. For Python, it prints module/class/function docstrings.
+- `--doc` prints Rust doc comments, Python docstrings, and leading JavaScript/TypeScript comments. For Rust, it also prints root module `//!` docs. For Python, it prints module/class/function docstrings. For JavaScript/TypeScript, it prints leading file/item comments.
 - Flags: `-l/--loc`, `--signatures`, `--doc`, `--type-bodies`, `--function-bodies`, `-s/--select <item-glob>`, `-S/--type-select <type-glob>`, `--no-ignore`
-- Prefer `-s` when you know an item path or subtree. Prefer `-S` when you want a type plus associated `impl` items in Rust or a class plus nested methods in Python.
+- Prefer `-s` when you know an item path or subtree. Prefer `-S` when you want a type plus associated `impl` items in Rust, a class plus nested methods in Python/JavaScript, or a class/interface plus nested members in TypeScript.
 - Selector paths are AST item paths, not filenames. For a top-level `fn f1()` in `fun.rs`, prefer `-s f1`, not `-s fun.f1`.
 
 ```bash
@@ -42,6 +42,18 @@ smartedit ast-print src/example.py
 
 # Python class plus nested methods
 smartedit ast-print -S Greeter --signatures --doc src/example.py
+
+# quick JavaScript outline
+smartedit ast-print src/example.js
+
+# JavaScript class plus nested methods
+smartedit ast-print -S Greeter --signatures --doc src/example.js
+
+# quick TypeScript outline
+smartedit ast-print src/example.ts
+
+# TypeScript interface/class plus nested members
+smartedit ast-print -S Greeter --signatures --doc src/example.ts
 
 # signatures plus doc comments for one item subtree
 smartedit ast-print -s 'outer.inner.*' --doc --signatures src/file_ast.rs
