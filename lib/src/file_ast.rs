@@ -1015,6 +1015,9 @@ impl<'a> RustDocContext<'a> {
                 break;
             }
             if line.starts_with("#[") {
+                if start_row.is_some() {
+                    break;
+                }
                 if row == 0 {
                     return None;
                 }
@@ -1087,15 +1090,16 @@ impl<'a> RustDocContext<'a> {
     }
 
     fn line_end(&self, row: usize) -> usize {
+        let start = self.line_start(row);
         let mut end = self
             .line_starts
             .get(row + 1)
             .copied()
             .unwrap_or(self.source.len());
-        if end > 0 && self.source.as_bytes()[end - 1] == b'\n' {
+        if end > start && self.source.as_bytes()[end - 1] == b'\n' {
             end -= 1;
         }
-        if end > 0 && self.source.as_bytes()[end - 1] == b'\r' {
+        if end > start && self.source.as_bytes()[end - 1] == b'\r' {
             end -= 1;
         }
         end
@@ -1251,15 +1255,16 @@ impl<'a> JsDocContext<'a> {
     }
 
     fn line_end(&self, row: usize) -> usize {
+        let start = self.line_start(row);
         let mut end = self
             .line_starts
             .get(row + 1)
             .copied()
             .unwrap_or(self.source.len());
-        if end > 0 && self.source.as_bytes()[end - 1] == b'\n' {
+        if end > start && self.source.as_bytes()[end - 1] == b'\n' {
             end -= 1;
         }
-        if end > 0 && self.source.as_bytes()[end - 1] == b'\r' {
+        if end > start && self.source.as_bytes()[end - 1] == b'\r' {
             end -= 1;
         }
         end
@@ -1882,6 +1887,30 @@ export enum Mode {
             }),
             "//! crate docs\n/// struct docs\nstruct S"
         );
+    }
+
+    #[test]
+    fn renders_docs_when_outer_attrs_precede_doc_comments() {
+        let ast = FileAst::parse(
+            AstLanguage::Rust,
+            "#[derive(Debug, Clone)]\n/// struct docs\nstruct S;\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "/// struct docs\nstruct S"
+        );
+    }
+
+    #[test]
+    fn parses_rust_source_with_only_a_trailing_newline() {
+        let ast = FileAst::parse(AstLanguage::Rust, "\n").unwrap();
+
+        assert_eq!(ast.render(AstRenderOptions::default()), "");
     }
 
     #[test]
