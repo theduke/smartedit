@@ -12,6 +12,7 @@ pub enum AstLanguage {
     JavaScript,
     TypeScript,
     Tsx,
+    Go,
 }
 
 impl AstLanguage {
@@ -22,6 +23,7 @@ impl AstLanguage {
             Some("js") | Some("mjs") | Some("cjs") | Some("jsx") => Some(Self::JavaScript),
             Some("ts") | Some("mts") | Some("cts") => Some(Self::TypeScript),
             Some("tsx") => Some(Self::Tsx),
+            Some("go") => Some(Self::Go),
             _ => None,
         }
     }
@@ -58,6 +60,7 @@ impl FileAst {
             AstLanguage::JavaScript | AstLanguage::TypeScript | AstLanguage::Tsx => {
                 parse_js_like_ast(language, source)
             }
+            AstLanguage::Go => parse_go_ast(source),
         }
     }
 
@@ -275,6 +278,32 @@ fn parse_python_ast(source: &str) -> Result<FileAst> {
     })
 }
 
+fn parse_go_ast(source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+    parser
+        .set_language(&language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: "go",
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: "go",
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let docs = JsDocContext::new(source);
+
+    Ok(FileAst {
+        language: AstLanguage::Go,
+        root_docs: docs.root_module_docs(),
+        items: collect_go_supported_items(root, &docs),
+        has_errors: root.has_error(),
+    })
+}
+
 fn parse_js_like_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
     let mut parser = Parser::new();
     let (tree_sitter_language, language_name, flavor) = match language {
@@ -293,7 +322,7 @@ fn parse_js_like_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
             "tsx",
             JsLikeFlavor::TypeScript,
         ),
-        AstLanguage::Rust | AstLanguage::Python => unreachable!(),
+        AstLanguage::Rust | AstLanguage::Python | AstLanguage::Go => unreachable!(),
     };
     parser
         .set_language(&tree_sitter_language)
@@ -329,6 +358,13 @@ fn collect_python_supported_items(node: Node<'_>, docs: &PythonDocContext<'_>) -
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
         .filter_map(|child| parse_python_item(child, docs))
+        .collect()
+}
+
+fn collect_go_supported_items(node: Node<'_>, docs: &JsDocContext<'_>) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .flat_map(|child| parse_go_items(child, docs))
         .collect()
 }
 
@@ -455,6 +491,117 @@ fn parse_python_class_item(
             .map(|body| collect_python_supported_items(body, docs))
             .unwrap_or_default(),
     }
+}
+
+fn parse_go_items(node: Node<'_>, docs: &JsDocContext<'_>) -> Vec<AstItem> {
+    match node.kind() {
+        "function_declaration" => vec![parse_go_function_item(node, docs, false)],
+        "method_declaration" => vec![parse_go_function_item(node, docs, true)],
+        "type_declaration" => parse_go_type_declaration_items(node, docs),
+        "const_declaration" => {
+            parse_go_value_declaration_item(AstItemKind::Const, "const", node, docs)
+                .into_iter()
+                .collect()
+        }
+        "var_declaration" => {
+            parse_go_value_declaration_item(AstItemKind::Static, "var", node, docs)
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn parse_go_function_item(node: Node<'_>, docs: &JsDocContext<'_>, is_method: bool) -> AstItem {
+    let source = docs.source;
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let receiver = node
+        .child_by_field_name("receiver")
+        .and_then(|receiver| extract_go_receiver_type(receiver, source));
+    let summary = if is_method {
+        match receiver.as_deref() {
+            Some(receiver) => format!("method {receiver}.{name}"),
+            None => format!("method {name}"),
+        }
+    } else {
+        format!("func {name}")
+    };
+    AstItem {
+        kind: AstItemKind::Function,
+        name: Some(name),
+        associated_type: receiver,
+        location: location_for_node(node),
+        docs: docs.leading_item_docs(node),
+        summary,
+        signature: Some(signature_text(node, source)),
+        body: Some(trimmed_node_text(node, source)),
+        children: node
+            .child_by_field_name("body")
+            .map(|body| collect_go_supported_items(body, docs))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_go_type_declaration_items(node: Node<'_>, docs: &JsDocContext<'_>) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .filter(|child| child.kind() == "type_spec")
+        .map(|spec| parse_go_type_spec_item(node, spec, docs))
+        .collect()
+}
+
+fn parse_go_type_spec_item(
+    render_node: Node<'_>,
+    spec: Node<'_>,
+    docs: &JsDocContext<'_>,
+) -> AstItem {
+    let source = docs.source;
+    let name =
+        child_text_by_field(spec, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let type_node = spec.child_by_field_name("type");
+    let kind = match type_node.map(|node| node.kind()) {
+        Some("struct_type") => AstItemKind::Struct,
+        Some("interface_type") => AstItemKind::Interface,
+        _ => AstItemKind::TypeAlias,
+    };
+    let keyword = match kind {
+        AstItemKind::Struct => "struct",
+        AstItemKind::Interface => "interface",
+        _ => "type",
+    };
+    AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(render_node),
+        docs: docs.leading_item_docs(render_node),
+        summary: format!("{keyword} {name}"),
+        signature: Some(trimmed_node_text(render_node, source)),
+        body: Some(trimmed_node_text(render_node, source)),
+        children: Vec::new(),
+    }
+}
+
+fn parse_go_value_declaration_item(
+    kind: AstItemKind,
+    keyword: &str,
+    node: Node<'_>,
+    docs: &JsDocContext<'_>,
+) -> Option<AstItem> {
+    let source = docs.source;
+    let name = first_go_spec_name(node, source)?;
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node),
+        docs: docs.leading_item_docs(node),
+        summary: format!("{keyword} {name}"),
+        signature: Some(trimmed_node_text(node, source)),
+        body: Some(trimmed_node_text(node, source)),
+        children: Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1299,6 +1446,37 @@ fn is_js_block_comment_end_candidate(line: &str) -> bool {
     line.contains("*/")
 }
 
+fn first_go_spec_name(node: Node<'_>, source: &str) -> Option<String> {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if matches!(child.kind(), "const_spec" | "var_spec") {
+            if let Some(name) = child.child_by_field_name("name") {
+                return Some(trimmed_node_text(name, source));
+            }
+            let mut spec_cursor = child.walk();
+            if let Some(identifier) = child
+                .named_children(&mut spec_cursor)
+                .find(|node| node.kind() == "identifier")
+            {
+                return Some(trimmed_node_text(identifier, source));
+            }
+        }
+    }
+    None
+}
+
+fn extract_go_receiver_type(receiver: Node<'_>, source: &str) -> Option<String> {
+    let text = trimmed_node_text(receiver, source);
+    let without_punctuation = text
+        .trim_matches(|ch| matches!(ch, '(' | ')'))
+        .replace(['*', '[', ']'], "");
+    let receiver_type = without_punctuation
+        .split_whitespace()
+        .last()
+        .unwrap_or(without_punctuation.trim());
+    extract_type_name(receiver_type)
+}
+
 fn assignment_target_name(node: Node<'_>, source: &str) -> Option<String> {
     let left = node.child_by_field_name("left")?;
     match left.kind() {
@@ -1474,7 +1652,7 @@ fn item_matches_selector(
                 .any(|pattern| pattern.is_match(path))
         })
         .unwrap_or(false);
-    let type_match = item_supports_type_selection(item)
+    let type_match = (item_supports_type_selection(item) || item.associated_type.is_some())
         && item
             .associated_type
             .as_deref()
@@ -1734,6 +1912,31 @@ export enum Mode {
 }
 "#;
 
+    const GO_SAMPLE: &str = r#"
+// package docs
+
+// Greeter docs
+type Greeter struct {
+    Name string
+}
+
+type Runner interface {
+    // Run docs
+    Run(task string) string
+}
+
+const DefaultName = "world"
+var Count int
+
+func NewGreeter(name string) Greeter {
+    return Greeter{Name: name}
+}
+
+func (g Greeter) Greet(name string) string {
+    return name
+}
+"#;
+
     #[test]
     fn renders_basic_rust_outline() {
         let ast = FileAst::parse(AstLanguage::Rust, SAMPLE).unwrap();
@@ -1922,7 +2125,7 @@ export enum Mode {
     }
 
     #[test]
-    fn parses_javascript_and_typescript_file_paths() {
+    fn parses_javascript_typescript_and_go_file_paths() {
         assert_eq!(
             AstLanguage::from_path(Path::new("example.js")),
             Some(AstLanguage::JavaScript)
@@ -1939,6 +2142,51 @@ export enum Mode {
             AstLanguage::from_path(Path::new("example.tsx")),
             Some(AstLanguage::Tsx)
         );
+        assert_eq!(
+            AstLanguage::from_path(Path::new("example.go")),
+            Some(AstLanguage::Go)
+        );
+    }
+
+    #[test]
+    fn renders_basic_go_outline() {
+        let ast = FileAst::parse(AstLanguage::Go, GO_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions::default()),
+            "struct Greeter\ninterface Runner\nconst DefaultName\nvar Count\nfunc NewGreeter\nmethod Greeter.Greet"
+        );
+    }
+
+    #[test]
+    fn renders_go_signatures_and_docs() {
+        let ast = FileAst::parse(AstLanguage::Go, GO_SAMPLE).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_signatures: true,
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "// package docs\n// Greeter docs\ntype Greeter struct {\n    Name string\n}\ntype Runner interface {\n    // Run docs\n    Run(task string) string\n}\nconst DefaultName = \"world\"\nvar Count int\nfunc NewGreeter(name string) Greeter\nfunc (g Greeter) Greet(name string) string"
+        );
+    }
+
+    #[test]
+    fn selects_go_type_and_methods() {
+        let ast = FileAst::parse(AstLanguage::Go, GO_SAMPLE).unwrap();
+
+        let rendered = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: Vec::new(),
+                    type_patterns: vec!["Greeter".to_owned()],
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap();
+
+        assert_eq!(rendered, "struct Greeter\nmethod Greeter.Greet");
     }
 
     #[test]

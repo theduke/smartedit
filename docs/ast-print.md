@@ -6,6 +6,7 @@ Supported languages:
 - Python
 - JavaScript (including JSX)
 - TypeScript (including TSX)
+- Go
 
 `smartedit ast-print` prints a structured outline of source files. It is meant for quickly understanding a file without reading it top to bottom.
 
@@ -31,6 +32,13 @@ For JavaScript and TypeScript, the output can include items such as:
 - functions, async functions, and generator functions
 - functions assigned to variables such as `const run = () => {}`
 - TypeScript interfaces, enums, and type aliases
+- leading file/item comments with `--doc`
+
+For Go, the output can include items such as:
+
+- functions and methods
+- structs, interfaces, and type aliases
+- const and var declarations
 - leading file/item comments with `--doc`
 
 You can use it to:
