@@ -6,7 +6,7 @@ It is built primarily for AI-agent workflows: inspect code structure without rea
 
 `smartedit` currently centers on three capabilities:
 
-- `smartedit ast-print` for fast structural exploration of Rust, Python, JavaScript, and TypeScript
+- `smartedit ast-print` for fast structural exploration of Rust, Python, JavaScript, TypeScript, and Go
 - `smartedit apply` for compact line-, text-, and file-oriented edits
 - `smartedit install-skill` for installing the bundled agent skill
 
@@ -86,7 +86,7 @@ The intended loop is:
 
 Typical agent scenarios:
 
-- A coding agent needs the outline of a Rust or TypeScript file before deciding what to read next.
+- A coding agent needs the outline of a Rust, TypeScript, or Go file before deciding what to read next.
 - An agent finds a function with `--loc`, then replaces only that function body.
 - An agent scans signatures across a glob to understand a subsystem without paying to read every file in full.
 - A repo installs the bundled skill so agents default to `smartedit` first and fall back only when needed.
