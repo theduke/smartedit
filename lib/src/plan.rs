@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::fs::FileIdentity;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvaluationPlan {
     modification_plans: Vec<ModificationPlan>,
@@ -58,10 +60,12 @@ pub enum PlannedAction {
         path: PathBuf,
         bytes: Vec<u8>,
         overwrite: bool,
+        expected_identity: Option<FileIdentity>,
     },
     DeleteFile {
         path: PathBuf,
         missing_ok: bool,
+        expected_identity: Option<FileIdentity>,
     },
     MoveFile {
         source: PathBuf,

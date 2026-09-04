@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use walkdir::WalkDir;
@@ -11,6 +12,11 @@ use walkdir::WalkDir;
 /// with [`io::ErrorKind::AlreadyExists`] when the destination directory entry already exists,
 /// including when that entry is a dangling symbolic link.
 pub trait FileSystem {
+    /// Whether this implementation supplies enforceable entry/content identity preconditions.
+    fn identity_checks_supported(&self) -> bool {
+        false
+    }
+
     fn create_dir_all(&self, path: &Path) -> io::Result<()>;
     fn write_bytes(&self, path: &Path, contents: &[u8]) -> io::Result<()>;
     /// Creates and writes a new file without replacing an existing directory entry.
@@ -22,19 +28,104 @@ pub trait FileSystem {
     fn exists(&self, path: &Path) -> io::Result<bool>;
     fn is_file(&self, path: &Path) -> io::Result<bool>;
     fn is_dir(&self, path: &Path) -> io::Result<bool>;
+    fn is_symlink(&self, _path: &Path) -> io::Result<bool> {
+        Ok(false)
+    }
     fn list_files(&self, root: &Path, recursive: bool) -> io::Result<Vec<PathBuf>>;
+
+    /// Reports whether two paths currently resolve to the same file contents.
+    fn same_content_file(&self, left: &Path, right: &Path) -> io::Result<bool> {
+        Ok(matches!(
+            (self.content_identity(left)?, self.content_identity(right)?),
+            (Some(left), Some(right)) if left == right
+        ))
+    }
+
+    /// Returns the identity of the content reached by `path`, following a final symbolic link.
+    ///
+    /// The default reports that identity checks are unsupported. Implementations that return an
+    /// identity should also override `write_bytes_checked` so the check and opening the file are
+    /// performed against the same object.
+    fn content_identity(&self, _path: &Path) -> io::Result<Option<FileIdentity>> {
+        Ok(None)
+    }
+
+    /// Returns the identity of the directory entry at `path`, without following a final symlink.
+    fn entry_identity(&self, _path: &Path) -> io::Result<Option<FileIdentity>> {
+        Ok(None)
+    }
+
+    /// Writes only if the current content identity is still `expected`.
+    fn write_bytes_checked(
+        &self,
+        path: &Path,
+        contents: &[u8],
+        expected: &FileIdentity,
+    ) -> io::Result<()> {
+        if self.content_identity(path)?.as_ref() != Some(expected) {
+            return Err(identity_mismatch("file changed before write"));
+        }
+        self.write_bytes(path, contents)
+    }
+
+    /// Removes only if the current entry identity is still `expected`.
+    fn remove_file_checked(&self, path: &Path, expected: &FileIdentity) -> io::Result<()> {
+        if self.entry_identity(path)?.as_ref() != Some(expected) {
+            return Err(identity_mismatch("file changed before delete"));
+        }
+        self.remove_file(path)
+    }
 }
+
+/// An opaque filesystem identity captured while evaluating a plan.
+#[derive(Debug, Clone)]
+pub struct FileIdentity(EntryIdentity);
+
+impl FileIdentity {
+    /// Creates an identity token for a custom [`FileSystem`] implementation.
+    ///
+    /// Tokens only compare equal to custom tokens containing the same bytes; they never compare
+    /// equal to identities produced by [`OsFileSystem`].
+    pub fn custom(token: impl Into<Vec<u8>>) -> Self {
+        Self(EntryIdentity::Custom(token.into().into()))
+    }
+}
+
+impl PartialEq for FileIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.matches_identity(&other.0)
+    }
+}
+
+impl Eq for FileIdentity {}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct OsFileSystem;
 
 impl FileSystem for OsFileSystem {
+    fn identity_checks_supported(&self) -> bool {
+        true
+    }
+
     fn create_dir_all(&self, path: &Path) -> io::Result<()> {
         fs::create_dir_all(path)
     }
 
     fn write_bytes(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
         fs::write(path, contents)
+    }
+
+    fn write_bytes_checked(
+        &self,
+        path: &Path,
+        contents: &[u8],
+        expected: &FileIdentity,
+    ) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new().write(true).open(path)?;
+        let actual = EntryIdentity::from_file(&file)?;
+        verify_expected_identity(&actual, Some(&expected.0))?;
+        file.set_len(0)?;
+        file.write_all(contents)
     }
 
     fn create_new_bytes(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -51,6 +142,10 @@ impl FileSystem for OsFileSystem {
 
     fn remove_file(&self, path: &Path) -> io::Result<()> {
         fs::remove_file(path)
+    }
+
+    fn remove_file_checked(&self, path: &Path, expected: &FileIdentity) -> io::Result<()> {
+        remove_entry_if_matches(path, &expected.0, "file changed before delete")
     }
 
     fn move_file(&self, source: &Path, destination: &Path, overwrite: bool) -> io::Result<()> {
@@ -86,7 +181,7 @@ impl FileSystem for OsFileSystem {
     }
 
     fn exists(&self, path: &Path) -> io::Result<bool> {
-        path.try_exists()
+        entry_exists(path)
     }
 
     fn is_file(&self, path: &Path) -> io::Result<bool> {
@@ -97,13 +192,17 @@ impl FileSystem for OsFileSystem {
         Ok(fs::metadata(path)?.is_dir())
     }
 
+    fn is_symlink(&self, path: &Path) -> io::Result<bool> {
+        Ok(fs::symlink_metadata(path)?.file_type().is_symlink())
+    }
+
     fn list_files(&self, root: &Path, recursive: bool) -> io::Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         let max_depth = if recursive { usize::MAX } else { 1 };
 
         for entry in WalkDir::new(root).max_depth(max_depth).min_depth(1) {
             let entry = entry?;
-            if entry.file_type().is_file() {
+            if entry.file_type().is_file() || entry.file_type().is_symlink() {
                 files.push(entry.into_path());
             }
         }
@@ -111,6 +210,23 @@ impl FileSystem for OsFileSystem {
         files.sort();
         Ok(files)
     }
+
+    fn content_identity(&self, path: &Path) -> io::Result<Option<FileIdentity>> {
+        let file = fs::File::open(path)?;
+        Ok(Some(FileIdentity(EntryIdentity::from_file(&file)?)))
+    }
+
+    fn entry_identity(&self, path: &Path) -> io::Result<Option<FileIdentity>> {
+        Ok(Some(FileIdentity(EntryIdentity::from_path(path)?)))
+    }
+
+    fn same_content_file(&self, left: &Path, right: &Path) -> io::Result<bool> {
+        same_file::is_same_file(left, right)
+    }
+}
+
+fn identity_mismatch(message: &str) -> io::Error {
+    io::Error::other(message.to_owned())
 }
 
 fn move_file_no_replace(source: &Path, destination: &Path) -> io::Result<()> {
@@ -137,6 +253,11 @@ fn move_file_no_replace_retained(
         create_symlink_no_replace(source, destination)?;
         let destination_identity = EntryIdentity::from_path(destination)?;
         if !source_identity.matches_path(source)? {
+            let _ = remove_entry_if_matches(
+                destination,
+                &destination_identity,
+                "published symbolic link changed before cleanup",
+            );
             return Err(io::Error::other(
                 "source entry changed while publishing; source retained",
             ));
@@ -161,6 +282,13 @@ fn move_file_no_replace_retained(
     match fs::hard_link(source, destination) {
         Ok(()) => {
             if !source_identity.matches_path(destination)? {
+                if let Ok(destination_identity) = EntryIdentity::from_path(destination) {
+                    let _ = remove_entry_if_matches(
+                        destination,
+                        &destination_identity,
+                        "published destination changed before cleanup",
+                    );
+                }
                 return Err(io::Error::other(
                     "destination does not reference the retained source; source retained",
                 ));
@@ -253,7 +381,7 @@ fn copy_file_via_anonymous_staging(
     // copied contents are complete.
     staging_file.set_permissions(permissions)?;
 
-    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
+    let destination_c = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "destination contains a NUL byte",
@@ -268,14 +396,25 @@ fn copy_file_via_anonymous_staging(
             staging_file.as_raw_fd(),
             CStr::as_ptr(empty_path),
             libc::AT_FDCWD,
-            destination.as_ptr(),
+            destination_c.as_ptr(),
             libc::AT_EMPTY_PATH,
         )
     };
     if result == -1 {
         return Err(io::Error::last_os_error());
     }
-    EntryIdentity::from_file(&staging_file)
+    let identity = EntryIdentity::from_file(&staging_file)?;
+    if !identity.matches_path(destination)? {
+        let _ = remove_entry_if_matches(
+            destination,
+            &identity,
+            "published destination changed before cleanup",
+        );
+        return Err(io::Error::other(
+            "published destination does not reference the staged file",
+        ));
+    }
+    Ok(identity)
 }
 
 #[cfg(unix)]
@@ -326,13 +465,27 @@ fn copy_file_via_exclusive_destination(
         .write(true)
         .create_new(true)
         .open(destination)?;
-    io::copy(source_file, &mut destination_file)?;
-    destination_file.flush()?;
-    // Writing can clear setuid/setgid bits on Unix, so restore the source mode last.
-    destination_file.set_permissions(permissions)?;
-
     let identity = EntryIdentity::from_file(&destination_file)?;
+    let copy_result = (|| {
+        io::copy(source_file, &mut destination_file)?;
+        destination_file.flush()?;
+        // Writing can clear setuid/setgid bits on Unix, so restore the source mode last.
+        destination_file.set_permissions(permissions)
+    })();
+    if let Err(error) = copy_result {
+        let _ = remove_entry_if_matches(
+            destination,
+            &identity,
+            "partial destination changed before cleanup",
+        );
+        return Err(error);
+    }
     if !identity.matches_path(destination)? {
+        let _ = remove_entry_if_matches(
+            destination,
+            &identity,
+            "copied destination changed before cleanup",
+        );
         return Err(io::Error::other(
             "destination entry changed while copying; source retained",
         ));
@@ -340,27 +493,30 @@ fn copy_file_via_exclusive_destination(
     Ok(identity)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum EntryIdentity {
-    File(same_file::Handle),
+    File(Arc<same_file::Handle>),
+    Custom(Arc<[u8]>),
     #[cfg(unix)]
     Symlink {
         device: u64,
         inode: u64,
     },
     #[cfg(windows)]
-    Symlink(same_file::Handle),
+    Symlink(Arc<same_file::Handle>),
 }
 
 impl EntryIdentity {
     fn from_file(file: &fs::File) -> io::Result<Self> {
-        Ok(Self::File(same_file::Handle::from_file(file.try_clone()?)?))
+        Ok(Self::File(Arc::new(same_file::Handle::from_file(
+            file.try_clone()?,
+        )?)))
     }
 
     fn from_path(path: &Path) -> io::Result<Self> {
         let metadata = fs::symlink_metadata(path)?;
         if !metadata.file_type().is_symlink() {
-            return Ok(Self::File(same_file::Handle::from_path(path)?));
+            return Ok(Self::File(Arc::new(same_file::Handle::from_path(path)?)));
         }
 
         #[cfg(unix)]
@@ -385,7 +541,7 @@ impl EntryIdentity {
                 .read(true)
                 .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
                 .open(path)?;
-            Ok(Self::Symlink(same_file::Handle::from_file(file)?))
+            Ok(Self::Symlink(Arc::new(same_file::Handle::from_file(file)?)))
         }
 
         #[cfg(not(any(unix, windows)))]
@@ -406,6 +562,7 @@ impl EntryIdentity {
     fn matches_identity(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::File(left), Self::File(right)) => left == right,
+            (Self::Custom(left), Self::Custom(right)) => left == right,
             #[cfg(unix)]
             (
                 Self::Symlink {
@@ -721,5 +878,42 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn portable_copy_removes_its_own_partial_destination_after_failure() {
+        let dir = TestDir::new("portable-partial-cleanup");
+        let source_directory = dir.path().join("source-directory");
+        let destination = dir.path().join("destination.txt");
+        fs::create_dir(&source_directory).unwrap();
+        let mut source = fs::File::open(&source_directory).unwrap();
+        let permissions = source.metadata().unwrap().permissions();
+
+        super::copy_file_via_exclusive_destination(&mut source, permissions, &destination)
+            .unwrap_err();
+
+        assert!(fs::symlink_metadata(destination).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_listing_includes_symlink_entries_without_following_child_directories() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("list-symlinks");
+        let child_directory = dir.path().join("child-directory");
+        let directory_link = dir.path().join("directory-link");
+        let dangling_link = dir.path().join("dangling-link");
+        fs::create_dir(&child_directory).unwrap();
+        fs::write(child_directory.join("nested.txt"), "nested").unwrap();
+        symlink(&child_directory, &directory_link).unwrap();
+        symlink("missing", &dangling_link).unwrap();
+
+        let files = OsFileSystem.list_files(dir.path(), true).unwrap();
+
+        assert!(files.contains(&directory_link));
+        assert!(files.contains(&dangling_link));
+        assert!(!files.contains(&directory_link.join("nested.txt")));
     }
 }

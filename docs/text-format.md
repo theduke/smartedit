@@ -50,6 +50,8 @@ Within one snapshot stage:
 - line ranges are read from the original contents of the source file in that snapshot
 - destination file contents are also taken from that snapshot
 - multiple text edits that affect the same file are merged into one final write
+- hard-linked names for the same existing file are merged just like symbolic-link aliases;
+  independent whole-file writes through two hard links are rejected as conflicting
 - lexical aliases such as `a.txt`, `./a.txt`, and `dir/../a.txt` identify the same file
 - later operations in the same stage do not see earlier operations' results
 
@@ -86,6 +88,12 @@ the complete existing file, which merges a symlink with its content target; move
 the final component as an entry name so they still target the symbolic link itself. No additional
 case folding is attempted for nonexistent paths; existing-path casing follows the platform's
 canonicalization behavior.
+
+Plans capture the identity of existing files selected for overwrite or deletion. The OS filesystem
+checks that identity again before truncating or removing an entry, so a path replaced after planning
+is left untouched and execution fails. Custom `FileSystem` implementations opt into this protection
+by implementing the identity methods and checked write/delete methods; the default methods retain
+compatibility but cannot provide an atomic host-filesystem identity guarantee.
 
 ### Incremental Mode
 
@@ -183,6 +191,9 @@ Semantics:
   Unix setuid/setgid bits), followed by source deletion
 - symbolic links remain symbolic links: when a direct filesystem move is unavailable, the link is
   recreated with the same link target and the source link is removed
+- exact specs treat a final symbolic link as the selected entry, including dangling links and links
+  to directories; directory and glob scans include symbolic-link entries but do not recursively
+  traverse child directory links (an explicitly named directory-root link is followed)
 - where supported, cross-filesystem copies use an anonymous staging inode and publish that exact
   open file with an atomic no-replace operation; the portable fallback copies through an
   exclusively created destination and verifies its file identity before removing the source
@@ -473,9 +484,15 @@ path/to/file.rs
 
 Matches exactly one file path.
 
+For file-oriented move and remove operations, an exact final symbolic link is a file entry: dangling
+links and links to directories can be moved or removed without affecting their targets.
+
 ### Directory-All
 
 A path ending in `/` or `\` means “all files under this directory”, recursively.
+
+An explicitly named symbolic link to a directory is followed as the scan root. Symbolic links found
+below that root are matched as entries and are not traversed recursively.
 
 Examples:
 

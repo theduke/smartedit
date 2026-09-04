@@ -275,6 +275,7 @@ fn format_action(action: &PlannedAction, root: &Path) -> String {
             path,
             bytes,
             overwrite,
+            ..
         } => format!(
             "{} file `{}` ({} bytes)",
             if *overwrite { "write" } else { "create" },

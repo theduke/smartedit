@@ -451,6 +451,11 @@ fn path_spec_from_plain_token(token: &str, span: Span) -> PathSpec {
 
     if token.ends_with(['/', '\\']) {
         let root = token.trim_end_matches(['/', '\\']);
+        let root = if root.is_empty() || (root.ends_with(':') && root.len() + 1 == token.len()) {
+            token
+        } else {
+            root
+        };
         return PathSpec::files_in_directory(normalize_empty_path(root)).with_span(span);
     }
 
@@ -470,8 +475,9 @@ fn split_glob_root(token: &str) -> (PathBuf, String) {
     let Some(separator_index) = prefix.rfind(['/', '\\']) else {
         return (PathBuf::from("."), token.to_owned());
     };
-    let root = if separator_index == 0 {
-        &token[..1]
+    let separator_is_drive_root = separator_index == 2 && token.as_bytes().get(1) == Some(&b':');
+    let root = if separator_index == 0 || separator_is_drive_root {
+        &token[..=separator_index]
     } else {
         &token[..separator_index]
     };
@@ -481,6 +487,10 @@ fn split_glob_root(token: &str) -> (PathBuf, String) {
 }
 
 fn split_regex_root(pattern: &str) -> (PathBuf, String) {
+    if has_top_level_regex_alternation(pattern) {
+        return (PathBuf::from("."), pattern.to_owned());
+    }
+
     let mut prefix = String::new();
     let mut chars = pattern.chars().peekable();
 
@@ -506,6 +516,29 @@ fn split_regex_root(pattern: &str) -> (PathBuf, String) {
     let relative_pattern = &pattern[separator_index + 1..];
 
     (normalize_empty_path(root), relative_pattern.to_owned())
+}
+
+fn has_top_level_regex_alternation(pattern: &str) -> bool {
+    let mut escaped = false;
+    let mut in_class = false;
+    let mut group_depth = 0usize;
+
+    for ch in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '[' if !in_class => in_class = true,
+            ']' if in_class => in_class = false,
+            '(' if !in_class => group_depth += 1,
+            ')' if !in_class => group_depth = group_depth.saturating_sub(1),
+            '|' if !in_class && group_depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn normalize_empty_path(path: impl Into<PathBuf>) -> PathBuf {
@@ -690,6 +723,86 @@ r r"a/[a-z]+\.rs"
             }
             other => panic!("unexpected modification: {other:?}"),
         }
+    }
+
+    #[test]
+    fn top_level_regex_alternation_keeps_mixed_prefixes() {
+        let program = parse_edit_program(r#"r r"src/.*\.rs|README\.md""#).unwrap();
+        let Modification::Generic(GenericModification::DeleteFiles { targets, .. }) =
+            &program.stages()[0].modifications()[0]
+        else {
+            panic!("expected remove operation");
+        };
+        assert_eq!(
+            targets.kind,
+            PathSpecKind::Regex {
+                root: PathBuf::from("."),
+                pattern: r"src/.*\.rs|README\.md".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn directory_and_glob_roots_are_not_reduced_to_drive_relative_paths() {
+        let directory = parse_edit_program(r"r C:\").unwrap();
+        let Modification::Generic(GenericModification::DeleteFiles { targets, .. }) =
+            &directory.stages()[0].modifications()[0]
+        else {
+            panic!("expected remove operation");
+        };
+        assert_eq!(
+            targets.kind,
+            PathSpecKind::FilesInDirectory {
+                root: PathBuf::from(r"C:\"),
+                recursive: true,
+            }
+        );
+
+        let glob = parse_edit_program(r"r C:\*.rs").unwrap();
+        let Modification::Generic(GenericModification::DeleteFiles { targets, .. }) =
+            &glob.stages()[0].modifications()[0]
+        else {
+            panic!("expected remove operation");
+        };
+        assert_eq!(
+            targets.kind,
+            PathSpecKind::Glob {
+                root: PathBuf::from(r"C:\"),
+                pattern: "*.rs".to_owned(),
+            }
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_root_directory_and_glob_remain_absolute() {
+        let directory = parse_edit_program("r /").unwrap();
+        let Modification::Generic(GenericModification::DeleteFiles { targets, .. }) =
+            &directory.stages()[0].modifications()[0]
+        else {
+            panic!("expected remove operation");
+        };
+        assert_eq!(
+            targets.kind,
+            PathSpecKind::FilesInDirectory {
+                root: PathBuf::from("/"),
+                recursive: true,
+            }
+        );
+
+        let glob = parse_edit_program("r /*.rs").unwrap();
+        let Modification::Generic(GenericModification::DeleteFiles { targets, .. }) =
+            &glob.stages()[0].modifications()[0]
+        else {
+            panic!("expected remove operation");
+        };
+        assert_eq!(
+            targets.kind,
+            PathSpecKind::Glob {
+                root: PathBuf::from("/"),
+                pattern: "*.rs".to_owned(),
+            }
+        );
     }
 
     #[test]

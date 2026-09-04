@@ -9,7 +9,7 @@ use crate::edit::{
     ProgramMode, RangeSet, TextPattern, resolve_insertion_offset, resolve_matching_line_ranges,
 };
 use crate::error::{Result, SmartEditError};
-use crate::fs::{FileSystem, OsFileSystem};
+use crate::fs::{FileIdentity, FileSystem, OsFileSystem};
 use crate::plan::{EvaluationPlan, ExecutionOptions, ModificationPlan, PlannedAction};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -23,10 +23,12 @@ enum PlannedTargetKind {
     File,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct PlannedTarget {
     kind: PlannedTargetKind,
     modification_index: usize,
+    path: PathBuf,
+    follows_final_symlink: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +62,7 @@ struct PendingTextDeletion {
 struct PendingTextFileUpdate {
     path: PathBuf,
     original_existed: bool,
+    expected_identity: Option<FileIdentity>,
     original_content: String,
     deletions: Vec<PendingTextDeletion>,
     insertions: Vec<PendingTextInsertion>,
@@ -89,6 +92,7 @@ enum SnapshotEntry {
 #[derive(Debug, Default, Clone)]
 struct SnapshotState {
     entries: BTreeMap<PathBuf, SnapshotEntry>,
+    content_objects: Vec<(FileIdentity, SnapshotEntry)>,
 }
 
 /// Resolves a filesystem-entry identity using the host cwd and existing parent metadata.
@@ -167,12 +171,29 @@ impl SnapshotState {
                 self.entries
                     .insert(entry_path_identity(path), SnapshotEntry::Directory);
             }
-            PlannedAction::WriteFile { path, bytes, .. } => {
+            PlannedAction::WriteFile {
+                path,
+                bytes,
+                expected_identity,
+                ..
+            } => {
                 self.ensure_parent_directories(path);
-                self.entries.insert(
-                    content_path_identity(path),
-                    SnapshotEntry::File(bytes.clone()),
-                );
+                let path_identity = content_path_identity(path);
+                self.entries
+                    .insert(path_identity.clone(), SnapshotEntry::File(bytes.clone()));
+                if let Some(expected_identity) = expected_identity {
+                    let content = SnapshotEntry::File(bytes.clone());
+                    if let Some((_, existing_content)) = self
+                        .content_objects
+                        .iter_mut()
+                        .find(|(identity, _)| identity == expected_identity)
+                    {
+                        *existing_content = content;
+                    } else {
+                        self.content_objects
+                            .push((expected_identity.clone(), content));
+                    }
+                }
             }
             PlannedAction::DeleteFile { path, .. } => {
                 self.entries
@@ -217,6 +238,13 @@ impl SnapshotState {
                 .then(|| self.entries.get(&content_identity))
                 .flatten()
         })
+    }
+
+    fn get_content_object(&self, identity: &FileIdentity) -> Option<&SnapshotEntry> {
+        self.content_objects
+            .iter()
+            .find(|(candidate, _)| candidate == identity)
+            .map(|(_, entry)| entry)
     }
 }
 
@@ -483,8 +511,9 @@ where
         overwrite: bool,
         snapshot: &SnapshotState,
     ) -> Result<Vec<PlannedAction>> {
-        if self.snapshot_exists(snapshot, path)? {
-            if self.snapshot_is_dir(snapshot, path)? {
+        let path_existed = self.snapshot_exists(snapshot, path)?;
+        if path_existed {
+            if !self.snapshot_is_symlink(snapshot, path)? && self.snapshot_is_dir(snapshot, path)? {
                 return Err(SmartEditError::ExpectedFileButFoundDirectory {
                     path: path.to_path_buf(),
                 });
@@ -497,10 +526,25 @@ where
         }
 
         let mut actions = self.parent_directory_actions(path, true, snapshot)?;
+        let expected_identity = overwrite
+            .then(|| self.content_identity(path))
+            .transpose()?
+            .flatten();
+        if overwrite
+            && path_existed
+            && snapshot.get(path).is_none()
+            && self.fs.identity_checks_supported()
+            && expected_identity.is_none()
+        {
+            return Err(SmartEditError::MissingFile {
+                path: path.to_path_buf(),
+            });
+        }
         actions.push(PlannedAction::WriteFile {
             path: path.to_path_buf(),
             bytes: content.as_bytes().to_vec(),
             overwrite,
+            expected_identity,
         });
         Ok(actions)
     }
@@ -534,13 +578,23 @@ where
             });
         }
 
-        Ok(matches
+        matches
             .into_iter()
-            .map(|matched| PlannedAction::DeleteFile {
-                path: matched.path,
-                missing_ok: false,
+            .map(|matched| {
+                let expected_identity = self.entry_identity(&matched.path)?;
+                if snapshot.get(&matched.path).is_none()
+                    && self.fs.identity_checks_supported()
+                    && expected_identity.is_none()
+                {
+                    return Err(SmartEditError::MissingFile { path: matched.path });
+                }
+                Ok(PlannedAction::DeleteFile {
+                    expected_identity,
+                    path: matched.path,
+                    missing_ok: false,
+                })
             })
-            .collect())
+            .collect()
     }
 
     fn plan_move_files(
@@ -570,7 +624,9 @@ where
             }
 
             if self.snapshot_exists(snapshot, destination_path.as_path())? {
-                if self.snapshot_is_dir(snapshot, destination_path.as_path())? {
+                if !self.snapshot_is_symlink(snapshot, destination_path.as_path())?
+                    && self.snapshot_is_dir(snapshot, destination_path.as_path())?
+                {
                     return Err(SmartEditError::ExpectedFileButFoundDirectory {
                         path: destination_path,
                     });
@@ -903,7 +959,13 @@ where
         pending: &'a mut PendingTextUpdates,
         snapshot: &SnapshotState,
     ) -> Result<&'a mut PendingTextFileUpdate> {
-        let identity = content_path_identity(path);
+        let mut identity = content_path_identity(path);
+        for (candidate, update) in &pending.files {
+            if self.same_content_file(&update.path, path)? {
+                identity = candidate.clone();
+                break;
+            }
+        }
         if !pending.files.contains_key(&identity) {
             let original_existed = self.snapshot_exists(snapshot, path)?;
             let original_content = if original_existed {
@@ -916,11 +978,31 @@ where
                 });
             };
 
+            let resolved_path = if original_existed {
+                content_path_identity(path)
+            } else {
+                path.to_path_buf()
+            };
+            let expected_identity = if original_existed {
+                self.content_identity(path)?
+            } else {
+                None
+            };
+            if original_existed
+                && snapshot.get(path).is_none()
+                && self.fs.identity_checks_supported()
+                && expected_identity.is_none()
+            {
+                return Err(SmartEditError::MissingFile {
+                    path: path.to_path_buf(),
+                });
+            }
             pending.files.insert(
                 identity.clone(),
                 PendingTextFileUpdate {
-                    path: path.to_path_buf(),
+                    path: resolved_path,
                     original_existed,
+                    expected_identity,
                     original_content,
                     deletions: Vec::new(),
                     insertions: Vec::new(),
@@ -947,7 +1029,7 @@ where
         for (_, update) in pending.files {
             let path = &update.path;
             let updated = self.render_pending_text_update(path.as_path(), &update)?;
-            if updated == update.original_content {
+            if update.original_existed && updated == update.original_content {
                 continue;
             }
 
@@ -956,6 +1038,7 @@ where
                 path: path.clone(),
                 bytes: updated.into_bytes(),
                 overwrite: update.original_existed,
+                expected_identity: update.expected_identity,
             });
             finalized.push((update.first_modification_index, actions));
         }
@@ -1159,7 +1242,7 @@ where
         if !self.snapshot_exists(snapshot, path)? {
             return Ok(Vec::new());
         }
-        if self.snapshot_is_dir(snapshot, path)? {
+        if !self.snapshot_is_symlink(snapshot, path)? && self.snapshot_is_dir(snapshot, path)? {
             return Err(SmartEditError::ExpectedFileButFoundDirectory {
                 path: path.to_path_buf(),
             });
@@ -1185,7 +1268,7 @@ where
         if !self.snapshot_exists(snapshot, root)? {
             return Ok(Vec::new());
         }
-        if self.snapshot_is_file(snapshot, root)? {
+        if !self.snapshot_is_dir(snapshot, root)? {
             return Err(SmartEditError::ExpectedDirectoryButFoundFile {
                 path: root.to_path_buf(),
             });
@@ -1213,7 +1296,7 @@ where
         if !self.snapshot_exists(snapshot, root)? {
             return Ok(Vec::new());
         }
-        if self.snapshot_is_file(snapshot, root)? {
+        if !self.snapshot_is_dir(snapshot, root)? {
             return Err(SmartEditError::ExpectedDirectoryButFoundFile {
                 path: root.to_path_buf(),
             });
@@ -1252,7 +1335,7 @@ where
         if !self.snapshot_exists(snapshot, root)? {
             return Ok(Vec::new());
         }
-        if self.snapshot_is_file(snapshot, root)? {
+        if !self.snapshot_is_dir(snapshot, root)? {
             return Err(SmartEditError::ExpectedDirectoryButFoundFile {
                 path: root.to_path_buf(),
             });
@@ -1316,6 +1399,7 @@ where
                         path.clone(),
                         PlannedTargetKind::Directory,
                         entry_path_identity(path),
+                        false,
                     )]
                 }
                 PlannedAction::WriteFile { path, .. } => {
@@ -1323,6 +1407,7 @@ where
                         path.clone(),
                         PlannedTargetKind::File,
                         content_path_identity(path),
+                        true,
                     )]
                 }
                 PlannedAction::DeleteFile { path, .. } => {
@@ -1330,6 +1415,7 @@ where
                         path.clone(),
                         PlannedTargetKind::File,
                         entry_path_identity(path),
+                        false,
                     )]
                 }
                 PlannedAction::MoveFile {
@@ -1341,16 +1427,18 @@ where
                         source.clone(),
                         PlannedTargetKind::File,
                         entry_path_identity(source),
+                        false,
                     ),
                     (
                         destination.clone(),
                         PlannedTargetKind::File,
                         entry_path_identity(destination),
+                        false,
                     ),
                 ],
             };
 
-            for (path, kind, identity) in action_targets {
+            for (path, kind, identity, follows_final_symlink) in action_targets {
                 if let Some(existing) = targets.get(&identity) {
                     if existing.kind == PlannedTargetKind::Directory
                         && kind == PlannedTargetKind::Directory
@@ -1365,6 +1453,16 @@ where
                 }
 
                 for (existing_path, existing) in targets.iter() {
+                    if follows_final_symlink
+                        && existing.follows_final_symlink
+                        && self.same_content_file(&path, &existing.path)?
+                    {
+                        return Err(SmartEditError::ConflictingActionTargets {
+                            path,
+                            first_modification: existing.modification_index,
+                            second_modification: modification_index,
+                        });
+                    }
                     let existing_file_is_ancestor = existing.kind == PlannedTargetKind::File
                         && identity.starts_with(existing_path);
                     let new_file_is_ancestor =
@@ -1383,6 +1481,8 @@ where
                     PlannedTarget {
                         kind,
                         modification_index,
+                        path,
+                        follows_final_symlink,
                     },
                 );
             }
@@ -1414,6 +1514,7 @@ where
                 path,
                 bytes,
                 overwrite,
+                expected_identity,
             } => {
                 if let Some(parent) = path.parent()
                     && !parent.as_os_str().is_empty()
@@ -1427,13 +1528,16 @@ where
                         })?;
                 }
                 if *overwrite {
-                    self.fs
-                        .write_bytes(path, bytes)
-                        .map_err(|source| SmartEditError::Io {
-                            operation: "write file",
-                            path: path.clone(),
-                            source,
-                        })
+                    let result = if let Some(expected) = expected_identity {
+                        self.fs.write_bytes_checked(path, bytes, expected)
+                    } else {
+                        self.fs.write_bytes(path, bytes)
+                    };
+                    result.map_err(|source| SmartEditError::Io {
+                        operation: "write file",
+                        path: path.clone(),
+                        source,
+                    })
                 } else {
                     self.fs.create_new_bytes(path, bytes).map_err(|source| {
                         if source.kind() == std::io::ErrorKind::AlreadyExists {
@@ -1448,7 +1552,15 @@ where
                     })
                 }
             }
-            PlannedAction::DeleteFile { path, missing_ok } => match self.fs.remove_file(path) {
+            PlannedAction::DeleteFile {
+                path,
+                missing_ok,
+                expected_identity,
+            } => match if let Some(expected) = expected_identity {
+                self.fs.remove_file_checked(path, expected)
+            } else {
+                self.fs.remove_file(path)
+            } {
                 Ok(()) => Ok(()),
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound && *missing_ok => {
                     Ok(())
@@ -1536,8 +1648,23 @@ where
         }
     }
 
-    fn snapshot_read_bytes(&self, snapshot: &SnapshotState, path: &Path) -> Result<Vec<u8>> {
+    fn snapshot_is_symlink(&self, snapshot: &SnapshotState, path: &Path) -> Result<bool> {
         match snapshot.get(path) {
+            Some(_) => Ok(false),
+            None => self.is_symlink(path),
+        }
+    }
+
+    fn snapshot_read_bytes(&self, snapshot: &SnapshotState, path: &Path) -> Result<Vec<u8>> {
+        let direct_entry = snapshot.get(path);
+        let entry = if direct_entry.is_some() {
+            direct_entry
+        } else if let Some(identity) = self.content_identity(path)? {
+            snapshot.get_content_object(&identity)
+        } else {
+            None
+        };
+        match entry {
             Some(SnapshotEntry::File(bytes)) => Ok(bytes.clone()),
             Some(SnapshotEntry::MovedFile(source)) => self.read_bytes(source),
             Some(SnapshotEntry::Directory) => Err(SmartEditError::ExpectedFileButFoundDirectory {
@@ -1567,7 +1694,7 @@ where
         if !self.snapshot_exists(snapshot, root)? {
             return Ok(Vec::new());
         }
-        if self.snapshot_is_file(snapshot, root)? {
+        if !self.snapshot_is_dir(snapshot, root)? {
             return Err(SmartEditError::ExpectedDirectoryButFoundFile {
                 path: root.to_path_buf(),
             });
@@ -1643,6 +1770,52 @@ where
             path: path.to_path_buf(),
             source,
         })
+    }
+
+    fn is_symlink(&self, path: &Path) -> Result<bool> {
+        self.fs
+            .is_symlink(path)
+            .map_err(|source| SmartEditError::Io {
+                operation: "check file type",
+                path: path.to_path_buf(),
+                source,
+            })
+    }
+
+    fn content_identity(&self, path: &Path) -> Result<Option<FileIdentity>> {
+        match self.fs.content_identity(path) {
+            Ok(identity) => Ok(identity),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(SmartEditError::Io {
+                operation: "identify file contents",
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    fn entry_identity(&self, path: &Path) -> Result<Option<FileIdentity>> {
+        match self.fs.entry_identity(path) {
+            Ok(identity) => Ok(identity),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(SmartEditError::Io {
+                operation: "identify file entry",
+                path: path.to_path_buf(),
+                source,
+            }),
+        }
+    }
+
+    fn same_content_file(&self, left: &Path, right: &Path) -> Result<bool> {
+        match self.fs.same_content_file(left, right) {
+            Ok(same) => Ok(same),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(SmartEditError::Io {
+                operation: "compare file identity",
+                path: right.to_path_buf(),
+                source,
+            }),
+        }
     }
 
     fn list_files(&self, root: &Path, recursive: bool) -> Result<Vec<PathBuf>> {
@@ -2939,5 +3112,384 @@ mod tests {
         Executor::new().execute(&program).unwrap();
 
         assert_eq!(fs::read_to_string(file).unwrap(), "last\n");
+    }
+
+    #[test]
+    fn creating_an_empty_missing_text_destination_still_creates_the_file() {
+        let dir = TestDir::new("empty-created-destination");
+        let file = dir.path().join("empty.txt");
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&file, 0),
+                content: String::new(),
+                create_destination_if_missing: true,
+                span: None,
+            }
+            .into(),
+        ]);
+
+        Executor::new().execute(&program).unwrap();
+
+        assert_eq!(fs::read(&file).unwrap(), b"");
+    }
+
+    #[test]
+    fn snapshot_text_edits_merge_hardlink_content_aliases() {
+        let dir = TestDir::new("hardlink-content-aliases");
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        fs::write(&first, "base\n").unwrap();
+        fs::hard_link(&first, &second).unwrap();
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&first, 0),
+                content: "first\n".into(),
+                create_destination_if_missing: false,
+                span: None,
+            }
+            .into(),
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&second, 0),
+                content: "second\n".into(),
+                create_destination_if_missing: false,
+                span: None,
+            }
+            .into(),
+        ]);
+
+        let plan = Executor::new().evaluate(&program).unwrap();
+        assert_eq!(
+            plan.actions()
+                .filter(|action| matches!(action, crate::plan::PlannedAction::WriteFile { .. }))
+                .count(),
+            1
+        );
+        Executor::new().execute(&program).unwrap();
+        assert_eq!(fs::read_to_string(first).unwrap(), "first\nsecond\nbase\n");
+        assert_eq!(fs::read_to_string(second).unwrap(), "first\nsecond\nbase\n");
+    }
+
+    #[test]
+    fn staged_text_edits_through_hardlinks_see_the_previous_stage() {
+        let dir = TestDir::new("staged-hardlink-content-aliases");
+        let first = dir.path().join("a.txt");
+        let second = dir.path().join("b.txt");
+        fs::write(&first, "base\n").unwrap();
+        fs::hard_link(&first, &second).unwrap();
+        let mut program = EditProgram::from_modifications(vec![
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&first, 0),
+                content: "FOO\n".into(),
+                create_destination_if_missing: false,
+                span: None,
+            }
+            .into(),
+        ]);
+        program.apply();
+        program.push(GenericModification::InsertLines {
+            target: FileInsertion::new(&second, 1),
+            content: "BAR\n".into(),
+            create_destination_if_missing: false,
+            span: None,
+        });
+
+        Executor::new().execute(&program).unwrap();
+
+        assert_eq!(fs::read_to_string(first).unwrap(), "FOO\nBAR\nbase\n");
+        assert_eq!(fs::read_to_string(second).unwrap(), "FOO\nBAR\nbase\n");
+    }
+
+    #[test]
+    fn incremental_text_edits_through_hardlinks_see_the_previous_edit() {
+        let dir = TestDir::new("incremental-hardlink-content-aliases");
+        let first = dir.path().join("a.txt");
+        let second = dir.path().join("b.txt");
+        fs::write(&first, "base\n").unwrap();
+        fs::hard_link(&first, &second).unwrap();
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&first, 0),
+                content: "FOO\n".into(),
+                create_destination_if_missing: false,
+                span: None,
+            }
+            .into(),
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&second, 1),
+                content: "BAR\n".into(),
+                create_destination_if_missing: false,
+                span: None,
+            }
+            .into(),
+        ])
+        .with_mode(ProgramMode::Incremental);
+
+        Executor::new().execute(&program).unwrap();
+
+        assert_eq!(fs::read_to_string(first).unwrap(), "FOO\nBAR\nbase\n");
+        assert_eq!(fs::read_to_string(second).unwrap(), "FOO\nBAR\nbase\n");
+    }
+
+    #[test]
+    fn independent_writes_to_hardlinks_are_rejected_as_conflicts() {
+        let dir = TestDir::new("hardlink-write-conflict");
+        let first = dir.path().join("first.txt");
+        let second = dir.path().join("second.txt");
+        fs::write(&first, "base\n").unwrap();
+        fs::hard_link(&first, &second).unwrap();
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::CreateFile {
+                path: first,
+                content: "first\n".into(),
+                overwrite: true,
+                span: None,
+            }
+            .into(),
+            GenericModification::CreateFile {
+                path: second,
+                content: "second\n".into(),
+                overwrite: true,
+                span: None,
+            }
+            .into(),
+        ]);
+
+        assert!(matches!(
+            Executor::new().evaluate(&program).unwrap_err(),
+            SmartEditError::ConflictingActionTargets { .. }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_a_symlink_and_writing_its_content_target_are_independent() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("symlink-entry-content-independence");
+        let target = dir.path().join("target.txt");
+        let link = dir.path().join("link.txt");
+        fs::write(&target, "base\n").unwrap();
+        symlink(&target, &link).unwrap();
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::DeleteFiles {
+                targets: PathSpec::exact_file(&link),
+                missing_matches_ok: false,
+                span: None,
+            }
+            .into(),
+            GenericModification::InsertLines {
+                target: FileInsertion::new(&link, 0),
+                content: "inserted\n".into(),
+                create_destination_if_missing: false,
+                span: None,
+            }
+            .into(),
+        ]);
+
+        Executor::new().execute(&program).unwrap();
+
+        assert!(fs::symlink_metadata(link).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "inserted\nbase\n");
+    }
+
+    #[test]
+    fn overwrite_write_rejects_an_entry_replaced_after_planning() {
+        let dir = TestDir::new("write-precondition");
+        let file = dir.path().join("data.txt");
+        let original = dir.path().join("original.txt");
+        fs::write(&file, "original\n").unwrap();
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::CreateFile {
+                path: file.clone(),
+                content: "planned\n".into(),
+                overwrite: true,
+                span: None,
+            }
+            .into(),
+        ]);
+        let executor = Executor::new();
+        let plan = executor.evaluate(&program).unwrap();
+        fs::rename(&file, &original).unwrap();
+        fs::write(&file, "raced\n").unwrap();
+
+        let error = executor.apply_plan(&plan).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SmartEditError::Io {
+                operation: "write file",
+                ..
+            }
+        ));
+        assert_eq!(fs::read_to_string(file).unwrap(), "raced\n");
+        assert_eq!(fs::read_to_string(original).unwrap(), "original\n");
+    }
+
+    #[test]
+    fn delete_rejects_an_entry_replaced_after_planning() {
+        let dir = TestDir::new("delete-precondition");
+        let file = dir.path().join("data.txt");
+        let original = dir.path().join("original.txt");
+        fs::write(&file, "original\n").unwrap();
+        let program = EditProgram::from_modifications(vec![
+            GenericModification::DeleteFiles {
+                targets: PathSpec::exact_file(&file),
+                missing_matches_ok: false,
+                span: None,
+            }
+            .into(),
+        ]);
+        let executor = Executor::new();
+        let plan = executor.evaluate(&program).unwrap();
+        fs::rename(&file, &original).unwrap();
+        fs::write(&file, "raced\n").unwrap();
+
+        let error = executor.apply_plan(&plan).unwrap_err();
+
+        assert!(matches!(
+            error,
+            SmartEditError::Io {
+                operation: "delete file",
+                ..
+            }
+        ));
+        assert_eq!(fs::read_to_string(file).unwrap(), "raced\n");
+        assert_eq!(fs::read_to_string(original).unwrap(), "original\n");
+    }
+
+    #[test]
+    fn planned_file_ancestors_are_rejected_across_stages_and_incremental_steps() {
+        let dir = TestDir::new("planned-file-ancestor");
+        let parent = dir.path().join("parent");
+        let child = parent.join("child.txt");
+        for program in [
+            {
+                let mut program = EditProgram::from_modifications(vec![
+                    GenericModification::CreateFile {
+                        path: parent.clone(),
+                        content: String::new(),
+                        overwrite: false,
+                        span: None,
+                    }
+                    .into(),
+                ]);
+                program.apply();
+                program.push(GenericModification::CreateFile {
+                    path: child.clone(),
+                    content: String::new(),
+                    overwrite: false,
+                    span: None,
+                });
+                program
+            },
+            EditProgram::from_modifications(vec![
+                GenericModification::CreateFile {
+                    path: parent.clone(),
+                    content: String::new(),
+                    overwrite: false,
+                    span: None,
+                }
+                .into(),
+                GenericModification::CreateFile {
+                    path: child,
+                    content: String::new(),
+                    overwrite: false,
+                    span: None,
+                }
+                .into(),
+            ])
+            .with_mode(ProgramMode::Incremental),
+        ] {
+            assert!(matches!(
+                Executor::new().evaluate(&program).unwrap_err(),
+                SmartEditError::ExpectedDirectoryButFoundFile { .. }
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn exact_move_and_delete_support_dangling_and_directory_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("exact-symlink-sources");
+        let missing_link = dir.path().join("missing-link");
+        let directory = dir.path().join("directory");
+        let directory_link = dir.path().join("directory-link");
+        let destination = dir.path().join("destination");
+        fs::create_dir_all(&directory).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        symlink("missing-target", &missing_link).unwrap();
+        symlink(&directory, &directory_link).unwrap();
+
+        Executor::new()
+            .execute(&EditProgram::from_modifications(vec![
+                GenericModification::MoveFiles {
+                    sources: PathSpec::exact_file(&missing_link),
+                    destination_dir: PathDestination::directory(&destination),
+                    create_destination_dir: false,
+                    overwrite: false,
+                    span: None,
+                }
+                .into(),
+                GenericModification::DeleteFiles {
+                    targets: PathSpec::exact_file(&directory_link),
+                    missing_matches_ok: false,
+                    span: None,
+                }
+                .into(),
+            ]))
+            .unwrap();
+
+        assert_eq!(
+            fs::read_link(destination.join("missing-link")).unwrap(),
+            Path::new("missing-target")
+        );
+        assert!(directory.is_dir());
+        assert!(fs::symlink_metadata(directory_link).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn glob_selects_symlink_entries_and_directory_source_follows_root_link() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TestDir::new("glob-symlink-sources");
+        let tree = dir.path().join("tree");
+        let tree_link = dir.path().join("tree-link");
+        let nested = tree.join("nested.txt");
+        let child_link = tree.join("child-link");
+        fs::create_dir_all(&tree).unwrap();
+        fs::write(&nested, "nested").unwrap();
+        symlink("missing", &child_link).unwrap();
+        symlink(&tree, &tree_link).unwrap();
+
+        let glob = EditProgram::from_modifications(vec![
+            GenericModification::DeleteFiles {
+                targets: PathSpec::glob(&tree, "*-link"),
+                missing_matches_ok: false,
+                span: None,
+            }
+            .into(),
+        ]);
+        Executor::new().execute(&glob).unwrap();
+        assert!(fs::symlink_metadata(&child_link).is_err());
+
+        let plan = Executor::new()
+            .evaluate(&EditProgram::from_modifications(vec![
+                GenericModification::MoveFiles {
+                    sources: PathSpec::files_in_directory(&tree_link),
+                    destination_dir: PathDestination::directory(dir.path().join("out")),
+                    create_destination_dir: true,
+                    overwrite: false,
+                    span: None,
+                }
+                .into(),
+            ]))
+            .unwrap();
+        assert!(plan.actions().any(|action| matches!(
+            action,
+            crate::plan::PlannedAction::MoveFile { source, .. } if source.ends_with("nested.txt")
+        )));
     }
 }
