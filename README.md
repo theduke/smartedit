@@ -17,7 +17,7 @@ For command syntax and detailed manual usage, see `docs/ast-print.md`, `docs/tex
 Use `smartedit` when an agent or operator should:
 
 - inspect file structure before reading full source
-- locate exact edit spans with `--loc`
+- locate whole-line edit ranges with `--loc`, including warnings when items share boundary lines
 - scan signatures or docs across many files
 - apply narrow edits instead of rewriting entire files
 - bias an agent toward token-efficient exploration and editing in a repo
@@ -79,13 +79,16 @@ Install it into a specific directory:
 smartedit install-skill --dir path/to/project
 ```
 
-This writes `SKILL.md` to `.agents/skills/smartedit` under the chosen root.
+This writes `SKILL.md` to `.agents/skills/smartedit` under the chosen root. User-home
+installation works with Unix `HOME` and Windows `USERPROFILE` or
+`HOMEDRIVE`/`HOMEPATH`. The installed skill invokes `smartedit`, so the executable
+must remain available on `PATH` when an agent uses it.
 
 ## Agent-Driven Usage
 
 The intended loop is:
 
-1. Use `smartedit ast-print` to get structure, signatures, docs, or exact locations.
+1. Use `smartedit ast-print` to get structure, signatures, docs, or line locations.
 2. Decide on a small target span instead of editing a whole file.
 3. Use `smartedit apply` with an inline edit program or `.smedit` file.
 
@@ -97,6 +100,11 @@ Typical agent scenarios:
 - A repo installs the bundled skill so agents default to `smartedit` first and fall back only when needed.
 
 ## Develop
+
+The Nix flake check runs tests for the complete Cargo workspace, including the
+`smartedit` library and CLI. GitHub CI runs the same workspace tests on Linux and
+Windows; the Windows job also exercises native user-home installation and CRLF
+edit-program input.
 
 ### Release Automation
 

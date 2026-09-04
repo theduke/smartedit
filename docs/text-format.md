@@ -18,6 +18,8 @@ Rules:
 - blank lines are ignored
 - `#` starts a comment and runs to the end of the line
 - comments may be full-line or inline
+- both LF and CRLF line endings are accepted
+- the final line does not need a trailing newline, including a comment-only final line
 
 Example:
 
@@ -48,6 +50,7 @@ Within one snapshot stage:
 - line ranges are read from the original contents of the source file in that snapshot
 - destination file contents are also taken from that snapshot
 - multiple text edits that affect the same file are merged into one final write
+- lexical aliases such as `a.txt`, `./a.txt`, and `dir/../a.txt` identify the same file
 - later operations in the same stage do not see earlier operations' results
 
 Example:
@@ -69,6 +72,20 @@ lm a.txt:1-2 out.txt:1
 Both inserts are planned against the same original contents of `out.txt`, then merged into one final write.
 
 When multiple inserts target the same destination offset in the same snapshot stage, they are applied in modification order.
+
+Overlapping plain deletions are coalesced. A move or replacement source may not overlap a
+destructive range from another modification in the same snapshot stage; such a plan is rejected
+instead of duplicating moved text or concatenating competing replacements. Adjacent ranges do not
+overlap.
+
+Path identity is normalized for merging and conflict detection. Relative paths are resolved from
+the process working directory, so an absolute path and its equivalent relative path identify the
+same target. Existing parents are canonicalized before any nonexistent remainder is appended, so
+`..` is interpreted correctly after traversing a symbolic link. Text reads and writes canonicalize
+the complete existing file, which merges a symlink with its content target; moves and deletes keep
+the final component as an entry name so they still target the symbolic link itself. No additional
+case folding is attempted for nonexistent paths; existing-path casing follows the platform's
+canonicalization behavior.
 
 ### Incremental Mode
 
@@ -151,14 +168,27 @@ Examples:
 m a.txt out/
 m a/b/ c/
 m src/*.rs rust/
+m "source files/*.txt" "staging #1/"
 m r"src/[a-z_]+\.rs" filtered/
 ```
 
 Semantics:
 
 - the source spec is resolved during planning
-- each matched file is copied into the destination directory
-- the source file is then deleted
+- each matched file is represented as one move action, without loading its contents into the plan
+- non-overwrite moves install the destination with an atomic no-replace filesystem operation, so
+  an existing file or dangling symbolic link is never clobbered
+- same-filesystem regular-file moves preserve inode metadata; across filesystems, regular files
+  use an exclusive copy that reapplies platform-supported permissions after writing (including
+  Unix setuid/setgid bits), followed by source deletion
+- symbolic links remain symbolic links: when a direct filesystem move is unavailable, the link is
+  recreated with the same link target and the source link is removed
+- where supported, cross-filesystem copies use an anonymous staging inode and publish that exact
+  open file with an atomic no-replace operation; the portable fallback copies through an
+  exclusively created destination and verifies its file identity before removing the source
+- library callers that enable overwrite get consistent replacement behavior on Windows and Unix;
+  the existing destination is moved to a temporary sibling and restored if the source move fails;
+  the retained backup identity is checked before either restoration or cleanup
 - relative paths below the match root are preserved
 - destination parent directories are created as needed
 - planning fails if no files match
@@ -201,6 +231,7 @@ Examples:
 r old.txt
 r generated/
 r build/*.tmp
+r "generated files/#old/"
 r r"cache/.+\.bin"
 ```
 
@@ -364,7 +395,7 @@ ldm Cargo.toml r"^#"
 Semantics:
 
 - the regex is evaluated independently for each line
-- matching is performed on line text without the trailing newline
+- matching is performed on line text without its logical trailing newline (`\n` or `\r\n`)
 - matching lines are deleted as whole lines, including their trailing newline when present
 
 ### `textreplace`
@@ -414,6 +445,22 @@ Supported forms:
 - glob
 - regex
 
+### Path Operands
+
+Every path operand can be an unquoted token or an ordinary double-quoted string. Quote a path when
+it contains whitespace, `#`, or `;`. Quoted paths use the same escapes as other string literals:
+`\n`, `\r`, `\t`, `\"`, and `\\`. A Windows backslash must therefore be doubled inside a quoted
+path, while existing unquoted Windows paths keep their native spelling.
+
+```text
+"source files/input #1.txt"
+"C:\\Program Files\\project\\input.txt"
+```
+
+After a quoted path is decoded, it is classified exactly like an unquoted path: a trailing `/` or
+`\` denotes a recursive directory source, and `*`, `?`, or `[` makes it a glob. Regex source specs
+remain distinct and use `r"..."` syntax.
+
 ### Exact File
 
 Examples:
@@ -421,19 +468,21 @@ Examples:
 ```text
 a.txt
 path/to/file.rs
+"path with spaces/file #1.rs"
 ```
 
 Matches exactly one file path.
 
 ### Directory-All
 
-A path ending in `/` means “all files under this directory”, recursively.
+A path ending in `/` or `\` means “all files under this directory”, recursively.
 
 Examples:
 
 ```text
 src/
 a/b/
+C:\work\src\
 ```
 
 ### Glob
@@ -445,12 +494,14 @@ Examples:
 ```text
 src/*.rs
 assets/**/*.png
+"generated files/**/*.txt"
 ```
 
 Glob matching is evaluated relative to the non-glob prefix:
 
 - `src/*.rs` becomes root `src`, pattern `*.rs`
 - `assets/**/*.png` becomes root `assets`, pattern `**/*.png`
+- `C:\work\src\*.rs` becomes root `C:\work\src`, pattern `*.rs`
 
 ### Regex
 
@@ -460,9 +511,34 @@ Regex specs use Rust-style raw string syntax:
 r"src/[a-z_]+\.rs"
 ```
 
-The planner infers a root directory from the literal prefix before the pattern becomes dynamic, then matches the regex against normalized relative paths beneath that root.
+The planner infers a root directory from the literal prefix before the pattern becomes dynamic,
+removes that directory prefix from the regex, then matches the remaining regex against normalized
+relative paths beneath that root. For example, `r"src/[a-z_]+\.rs"` uses root `src` and matches
+`r"[a-z_]+\.rs"` against paths below it.
 
 Regex matching uses `/` as the normalized separator.
+
+## Inline Command-Line Programs
+
+When operations are passed directly to `smartedit apply`, a semicolon outside a quoted string,
+raw regex, or comment separates statements. Semicolons inside strings and regexes are data and are
+preserved:
+
+```console
+smartedit apply 'li a.txt:0 "key;value\n"; ldm b.txt r"^x;y$"'
+smartedit apply 'ld "notes; archived/#1.txt":0-1'
+```
+
+A semicolon also ends an inline comment and begins the next statement, matching the historical
+command-line behavior.
+
+Choose exactly one input source: positional inline operations, `--file PATH` (use `-` for stdin),
+or piped stdin. `--file` and positional operations cannot be combined. Empty input and programs
+containing only whitespace, comments, `mode`, or `apply` directives are rejected because they
+contain no modifications.
+
+`--root DIR` changes the working directory used to resolve relative paths. It is not a containment
+boundary: absolute paths, `..`, and symbolic links may still address paths outside that directory.
 
 ## Line Range Syntax
 
@@ -478,6 +554,10 @@ Rules:
 - `start-end` means `[start, end)`
 - offsets are `usize` line indices
 - ranges should be sorted and non-overlapping
+- a leading Windows drive colon is part of the path, so `C:\work\file.txt:10-20` targets
+  `C:\work\file.txt` and uses the final colon as the range separator
+- for a quoted Windows path, escape its backslashes and put the range separator after the closing
+  quote: `"C:\\Program Files\\work.txt":10-20`
 
 ## String Literals
 
@@ -523,9 +603,22 @@ Planning:
 
 - resolves path specs into concrete files
 - validates that operations are possible
+- rejects incompatible file/directory target topologies, including a planned file whose path is an
+  ancestor of another planned target
+- validates existing target kinds even when overwrite behavior is enabled
+- carries overwrite intent into planned writes; non-overwrite file creation uses an exclusive
+  create operation, so a file appearing after planning is not truncated
 - produces a batch of concrete filesystem actions
 
-Execution applies that planned batch.
+Execution applies that planned batch in order. It is explicitly best-effort, not transactional: if
+a filesystem action fails, earlier successful actions are not rolled back. Snapshot and incremental
+describe how modifications are evaluated, not rollback behavior.
+If a move publishes its destination but cannot remove the source, both entries are left in place;
+this recoverable duplicate is safer than deleting a pathname another process may have replaced.
+Source and overwrite-backup identities are checked immediately before pathname removal. Portable
+filesystems do not provide an atomic compare-and-unlink operation, so an adversarial process with
+write access to the same directory can still replace an entry in the interval between that check
+and removal.
 
 This separation makes dry runs possible and allows validation before writing files.
 
@@ -548,6 +641,14 @@ lineinsert-op   := ("lineinsert" | "li") <file ":" offset> <string>
 linereplace-op  := ("linereplace" | "lr") <file ":" ranges> <string>
 linedeletematch-op := ("linedeletematch" | "ldm") <file> <regex>
 textreplace-op  := ("textreplace" | "tr") <source-spec> <match-pattern> <string>
+
+source-spec     := path-operand | regex
+destination-dir := path-operand
+source-file     := path-operand
+destination-file := path-operand
+file            := path-operand
+path-operand    := unquoted-path | quoted-path
+quoted-path     := string
 
 ranges          := range ("," range)*
 range           := <usize> "-" <usize>

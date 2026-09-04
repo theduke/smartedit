@@ -20,12 +20,19 @@ description: Prefer `smartedit ast-print` for Rust, Python, JavaScript, TypeScri
 - Supported languages: Rust, Python, JavaScript (including JSX), TypeScript (including TSX), and Go.
 - Use for: outlines, signatures, doc comments/docstrings, type bodies, function bodies, locations, nested item selection, type inspection, multi-file/glob scans.
 - Default to `--loc` when the result may drive an edit.
-- `--loc` is the most important exploration flag for editing: it prints line locations so you can target narrow `smartedit apply` operations instead of rewriting files.
-- Treat `--loc` output as the fast path from exploration to editing. Check the span, then use `ld`, `lr`, or `lm` against that area.
+- `--loc` is the most important exploration flag for editing: it prints zero-based, half-open line ranges that use the same coordinates as `smartedit apply`.
+- Treat `--loc` output as the fast path from exploration to editing. A plain `[start-end]` span can be copied directly into `ld`, `lr`, or `lm` as `start-end`.
+- Never apply a `[start-end shared-line]` span directly: another item or source fragment occupies a boundary line, and line-level edits cannot isolate it. Split/reformat onto separate lines or inspect and construct a safe line edit; `smartedit apply` has no byte-range mode.
 - `--doc` prints Rust doc comments, Python docstrings, and leading JavaScript/TypeScript comments. For Rust, it also prints root module `//!` docs. For Python, it prints module/class/function docstrings. For JavaScript/TypeScript, it prints leading file/item comments.
 - Flags: `-l/--loc`, `--signatures`, `--doc`, `--type-bodies`, `--function-bodies`, `-s/--select <item-glob>`, `-S/--type-select <type-glob>`, `--no-ignore`
 - Prefer `-s` when you know an item path or subtree. Prefer `-S` when you want a type plus associated `impl` items in Rust, a class plus nested methods in Python/JavaScript, or a class/interface plus nested members in TypeScript.
 - Selector paths are AST item paths, not filenames. For a top-level `fn f1()` in `fun.rs`, prefer `-s f1`, not `-s fun.f1`.
+- Selectors over multiple files are aggregate queries: files without a match are skipped, and the command fails only if no input file matches.
+- `ast-print` rejects syntax-error recovery trees, reports the first known zero-based error line and byte column, and prints no partial outline. Fix malformed input before relying on its structure or locations.
+- Rust item locations include owned docs, outer attributes, and standalone/intervening comments, but not a comment trailing earlier same-line code. Rust signatures and full bodies preserve the non-doc parts of that preamble.
+- Rust `--doc` recognizes doc comments and prose-bearing outer/inner `doc = ...` attributes; Rustdoc control attributes such as `doc(hidden)` remain in signature/full-body preambles.
+- Rust `-S` resolves impl targets using module-relative `self::`, repeated `super::`, `crate::`, and plain nested paths. Bare type names still match by basename.
+- With `--doc`, Rust inline-module `//!` docs appear as an indented child in outline/signature output and remain inside a requested full module body without duplication.
 
 ```bash
 # quick outline
