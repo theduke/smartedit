@@ -131,22 +131,12 @@ fn render_ast_files(
         let source = fs::read_to_string(path)
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         let ast = parse_file_ast(path, &source).map_err(|error| error.to_string())?;
-        if ast.has_errors {
-            let location = ast.first_error.map_or_else(String::new, |error| {
-                let kind = if error.is_missing {
-                    "missing syntax"
-                } else {
-                    "syntax error"
-                };
-                format!(" at zero-based {}:{} ({kind})", error.line, error.column)
-            });
-            return Err(format!(
-                "{}: source contains syntax errors{location}; refusing to render a partial AST",
-                display_path(path, current_dir),
-            ));
-        }
+        let render_options = AstRenderOptions {
+            include_locations: options.include_locations && !ast.has_errors,
+            ..options
+        };
         let rendered = if selector.is_empty() {
-            ast.render(options)
+            ast.render(render_options)
         } else {
             let selected = ast
                 .select_items(selector)
@@ -154,7 +144,7 @@ fn render_ast_files(
             if selected.is_empty() {
                 continue;
             }
-            ast.render_with_selector(selector, options)
+            ast.render_with_selector(selector, render_options)
                 .map_err(|error| format!("{}: {error}", display_path(path, current_dir)))?
         };
         rendered_files.push(RenderedAstFile {
@@ -632,40 +622,69 @@ mod tests {
     }
 
     #[test]
-    fn syntax_errors_are_rejected_for_every_supported_parser_family() {
+    fn syntax_errors_render_recovered_items_without_locations() {
         let dir = TestDir::new("syntax-errors");
         let fixtures = [
-            ("broken.rs", "fn broken(\n"),
-            ("broken.py", "def broken(\n"),
-            ("broken.js", "function broken( {\n"),
-            ("broken.ts", "interface Broken<T {\n"),
-            ("broken.tsx", "const broken = <div>;\n"),
-            ("broken.go", "package broken\n\nfunc Broken( {\n"),
+            (
+                "broken.rs",
+                "fn recovered() {}\nfn broken(\n",
+                "fn recovered",
+            ),
+            (
+                "broken.py",
+                "def recovered():\n    pass\n\ndef broken(\n",
+                "def recovered",
+            ),
+            (
+                "broken.js",
+                "function recovered() {}\nfunction broken( {\n",
+                "function recovered",
+            ),
+            (
+                "broken.ts",
+                "interface Recovered {}\ninterface Broken<T {\n",
+                "interface Recovered",
+            ),
+            (
+                "broken.tsx",
+                "const recovered = () => <div />;\nconst broken = <div>;\n",
+                "function recovered",
+            ),
+            (
+                "broken.go",
+                "package broken\n\nfunc Recovered() {}\nfunc Broken( {\n",
+                "func Recovered",
+            ),
         ];
 
-        for (name, source) in fixtures {
+        for (name, source, expected) in fixtures {
             let path = dir.path().join(name);
             fs::write(&path, source).unwrap();
-            let error = render_ast_files(
+            let rendered = render_ast_files(
                 std::slice::from_ref(&path),
                 dir.path(),
                 &AstSelector::default(),
-                AstRenderOptions::default(),
+                AstRenderOptions {
+                    include_locations: true,
+                    ..AstRenderOptions::default()
+                },
             )
-            .unwrap_err();
+            .unwrap();
+            assert_eq!(rendered.len(), 1);
+            assert!(rendered[0].rendered.contains(expected), "{name}");
             assert!(
-                error.contains("source contains syntax errors"),
-                "unexpected error for {name}: {error}"
-            );
-            assert!(
-                error.contains("at zero-based "),
-                "missing syntax-error location for {name}: {error}"
+                rendered[0]
+                    .rendered
+                    .lines()
+                    .all(|line| !line.trim_start().starts_with('[')),
+                "locations must be suppressed for recovered {name}: {}",
+                rendered[0].rendered
             );
         }
     }
 
     #[test]
-    fn incomplete_or_statement_shaped_go_inputs_fail_closed() {
+    fn incomplete_or_statement_shaped_go_inputs_are_still_renderable() {
         let dir = TestDir::new("go-source-shape");
         for (name, source) in [
             ("missing-package.go", "func MissingPackage() {}\n"),
@@ -676,36 +695,50 @@ mod tests {
         ] {
             let path = dir.path().join(name);
             fs::write(&path, source).unwrap();
-            let error = render_ast_files(
+            let rendered = render_ast_files(
                 std::slice::from_ref(&path),
                 dir.path(),
                 &AstSelector::default(),
-                AstRenderOptions::default(),
+                AstRenderOptions {
+                    include_locations: true,
+                    ..AstRenderOptions::default()
+                },
             )
-            .unwrap_err();
+            .unwrap();
+            assert_eq!(rendered.len(), 1, "{name}");
             assert!(
-                error.contains("source contains syntax errors at zero-based"),
-                "unexpected error for {name}: {error}"
+                rendered[0]
+                    .rendered
+                    .lines()
+                    .all(|line| !line.trim_start().starts_with('[')),
+                "locations must be suppressed for recovered {name}: {}",
+                rendered[0].rendered
             );
         }
     }
 
     #[test]
-    fn multi_file_syntax_error_is_found_before_any_output_is_returned() {
+    fn multi_file_rendering_keeps_locations_only_for_valid_files() {
         let dir = TestDir::new("syntax-error-batch");
         let valid = dir.path().join("valid.rs");
         let broken = dir.path().join("broken.rs");
         fs::write(&valid, "fn valid() {}\n").unwrap();
-        fs::write(&broken, "fn broken(\n").unwrap();
+        fs::write(&broken, "fn recovered() {}\nfn broken(\n").unwrap();
 
-        let error = render_ast_files(
+        let rendered = render_ast_files(
             &[valid, broken],
             dir.path(),
             &AstSelector::default(),
-            AstRenderOptions::default(),
+            AstRenderOptions {
+                include_locations: true,
+                ..AstRenderOptions::default()
+            },
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.starts_with("broken.rs: source contains syntax errors"));
+        assert_eq!(rendered.len(), 2);
+        assert!(rendered[0].rendered.starts_with('['));
+        assert!(rendered[1].rendered.contains("fn recovered"));
+        assert!(!rendered[1].rendered.starts_with('['));
     }
 }

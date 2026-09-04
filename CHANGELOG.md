@@ -9,8 +9,8 @@ All notable changes to this project will be documented in this file.
 - `ast-print --loc` now reports zero-based, half-open whole-line ranges. Ranges whose
   boundary lines contain other source are annotated `shared-line` and must not be
   passed directly to line-edit operations.
-- `ast-print` rejects syntax-error recovery trees instead of emitting partial output,
-  and selectors now aggregate matches across all input files.
+- `ast-print` renders recoverable structure from incomplete files, suppresses unsafe locations,
+  and aggregates selectors across all input files.
 - `apply` execution is explicitly best-effort. Snapshot and incremental modes describe
   evaluation visibility, not rollback guarantees.
 

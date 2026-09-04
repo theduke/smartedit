@@ -28,4 +28,4 @@ public structs or exhaustively matching public enums will need corresponding upd
 - Path identity, snapshot merging, destructive-overlap validation, target-topology
   checks, CRLF matching, and move semantics now preserve documented edit behavior.
 - AST parsing and selection cover the audited Rust, Python, JavaScript, TypeScript, TSX,
-  and Go constructs and fail closed on malformed source.
+  and Go constructs while retaining recovery metadata for malformed source.
