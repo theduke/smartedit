@@ -25,7 +25,7 @@
           cargoLock.lockFile = ./Cargo.lock;
 
           cargoBuildFlags = [ "--package" "smartedit-cli" ];
-          cargoTestFlags = [ "--package" "smartedit-cli" ];
+          cargoTestFlags = [ "--workspace" "--all-features" "--locked" ];
 
           meta = with lib; {
             description = workspacePackage.description;
