@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::env;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,31 +9,39 @@ use globset::Glob;
 use ignore::WalkBuilder;
 use smartedit::{AstLanguage, AstRenderOptions, AstSelector, parse_file_ast};
 
-use crate::cli_support::{display_path, resolve_root};
+use crate::cli_support::{display_path, resolve_root, write_stdout};
 
 #[derive(Debug, Args)]
 pub struct CmdAstPrint {
-    #[arg(short = 's', long = "select")]
+    /// Select item paths with glob syntax (for example `module.Type.method`).
+    #[arg(short = 's', long = "select", value_name = "ITEM_GLOB")]
     pub selectors: Vec<String>,
 
-    #[arg(short = 'S', long = "type-select")]
+    /// Select types and their associated items; qualified paths are accepted.
+    #[arg(short = 'S', long = "type-select", value_name = "TYPE_GLOB")]
     pub type_selectors: Vec<String>,
 
+    /// Render declaration signatures; Rust outer attributes are included.
     #[arg(long)]
     pub signatures: bool,
 
+    /// Render complete type, trait, impl, module, macro, and foreign-block bodies.
     #[arg(long = "type-bodies")]
     pub type_bodies: bool,
 
+    /// Render complete function bodies.
     #[arg(long = "function-bodies")]
     pub function_bodies: bool,
 
+    /// Include documentation comments, leading comments, or docstrings.
     #[arg(long)]
     pub doc: bool,
 
+    /// Prefix items with zero-based, half-open line ranges; shared lines are marked unsafe.
     #[arg(short = 'l', long = "loc")]
     pub loc: bool,
 
+    /// Include files normally excluded by ignore rules when expanding globs.
     #[arg(long = "no-ignore")]
     pub no_ignore: bool,
 
@@ -43,6 +52,12 @@ pub struct CmdAstPrint {
 #[derive(Debug, Default)]
 struct ResolvedAstInputs {
     supported_files: Vec<PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RenderedAstFile {
+    path: PathBuf,
+    rendered: String,
 }
 
 impl CmdAstPrint {
@@ -66,31 +81,96 @@ impl CmdAstPrint {
             type_patterns: self.type_selectors.clone(),
         };
 
-        for (index, path) in resolved.supported_files.iter().enumerate() {
-            let source = fs::read_to_string(path)
-                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-            let ast = parse_file_ast(path, &source).map_err(|error| error.to_string())?;
-            let rendered = if selector.is_empty() {
-                ast.render(options)
-            } else {
-                ast.render_with_selector(&selector, options)
-                    .map_err(|error| format!("{}: {error}", display_path(path, &current_dir)))?
-            };
-
-            if resolved.supported_files.len() > 1 {
-                if index > 0 {
-                    println!();
-                }
-                println!("{}", format_file_marker(path, &current_dir, false));
-            }
-            println!("{rendered}");
-            if resolved.supported_files.len() > 1 {
-                println!("{}", format_file_marker(path, &current_dir, true));
-            }
-        }
-
-        Ok(())
+        let rendered_files =
+            render_ast_files(&resolved.supported_files, &current_dir, &selector, options)?;
+        let show_file_markers = resolved.supported_files.len() > 1;
+        let output = format_ast_output(&rendered_files, &current_dir, show_file_markers);
+        write_stdout(&output)
     }
+}
+
+fn format_ast_output(
+    rendered_files: &[RenderedAstFile],
+    current_dir: &Path,
+    show_file_markers: bool,
+) -> String {
+    let mut output = String::new();
+    for (index, file) in rendered_files.iter().enumerate() {
+        if show_file_markers {
+            if index > 0 {
+                output.push('\n');
+            }
+            writeln!(
+                output,
+                "{}",
+                format_file_marker(&file.path, current_dir, false)
+            )
+            .expect("writing to a string cannot fail");
+        }
+        writeln!(output, "{}", file.rendered).expect("writing to a string cannot fail");
+        if show_file_markers {
+            writeln!(
+                output,
+                "{}",
+                format_file_marker(&file.path, current_dir, true)
+            )
+            .expect("writing to a string cannot fail");
+        }
+    }
+    output
+}
+
+fn render_ast_files(
+    paths: &[PathBuf],
+    current_dir: &Path,
+    selector: &AstSelector,
+    options: AstRenderOptions,
+) -> Result<Vec<RenderedAstFile>, String> {
+    let mut rendered_files = Vec::new();
+    for path in paths {
+        let source = fs::read_to_string(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        let ast = parse_file_ast(path, &source).map_err(|error| error.to_string())?;
+        if ast.has_errors {
+            let location = ast.first_error.map_or_else(String::new, |error| {
+                let kind = if error.is_missing {
+                    "missing syntax"
+                } else {
+                    "syntax error"
+                };
+                format!(" at zero-based {}:{} ({kind})", error.line, error.column)
+            });
+            return Err(format!(
+                "{}: source contains syntax errors{location}; refusing to render a partial AST",
+                display_path(path, current_dir),
+            ));
+        }
+        let rendered = if selector.is_empty() {
+            ast.render(options)
+        } else {
+            let selected = ast
+                .select_items(selector)
+                .map_err(|error| error.to_string())?;
+            if selected.is_empty() {
+                continue;
+            }
+            ast.render_with_selector(selector, options)
+                .map_err(|error| format!("{}: {error}", display_path(path, current_dir)))?
+        };
+        rendered_files.push(RenderedAstFile {
+            path: path.clone(),
+            rendered,
+        });
+    }
+
+    if !selector.is_empty() && rendered_files.is_empty() {
+        return Err(format!(
+            "no AST items matched selector {} across all input files",
+            selector.display()
+        ));
+    }
+
+    Ok(rendered_files)
 }
 
 fn format_file_marker(path: &Path, current_dir: &Path, is_end: bool) -> String {
@@ -209,7 +289,8 @@ fn looks_like_glob(input: &str) -> bool {
 }
 
 fn split_glob_root(input: &str) -> (PathBuf, String) {
-    let segments: Vec<&str> = input.split('/').collect();
+    let normalized = input.replace('\\', "/");
+    let segments: Vec<&str> = normalized.split('/').collect();
     let wildcard_index = segments
         .iter()
         .position(|segment| segment.contains('*') || segment.contains('?') || segment.contains('['))
@@ -244,7 +325,12 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{format_file_marker, resolve_ast_inputs, resolve_glob_input};
+    use smartedit::{AstRenderOptions, AstSelector};
+
+    use super::{
+        format_ast_output, format_file_marker, render_ast_files, resolve_ast_inputs,
+        resolve_glob_input, split_glob_root,
+    };
 
     struct TestDir {
         path: PathBuf,
@@ -356,6 +442,11 @@ mod tests {
         fs::create_dir_all(dir.path().join("src")).unwrap();
         fs::write(dir.path().join("src/keep.rs"), "fn keep() {}\n").unwrap();
         fs::write(dir.path().join("src/tool.py"), "def run():\n    pass\n").unwrap();
+        fs::write(
+            dir.path().join("src/api.pyi"),
+            "def request(value: str) -> str: ...\n",
+        )
+        .unwrap();
         fs::write(dir.path().join("src/tool.js"), "export function run() {}\n").unwrap();
         fs::write(
             dir.path().join("src/tool.ts"),
@@ -368,12 +459,16 @@ mod tests {
         assert_eq!(
             resolved.supported_files,
             vec![
+                dir.path().join("src/api.pyi"),
                 dir.path().join("src/keep.rs"),
                 dir.path().join("src/tool.js"),
                 dir.path().join("src/tool.py"),
                 dir.path().join("src/tool.ts")
             ]
         );
+
+        let direct = resolve_ast_inputs(&["src/api.pyi".to_owned()], dir.path(), false).unwrap();
+        assert_eq!(direct.supported_files, vec![dir.path().join("src/api.pyi")]);
     }
 
     #[test]
@@ -391,5 +486,193 @@ mod tests {
             format_file_marker(&path, dir.path(), true),
             "== end src/main.rs =="
         );
+    }
+
+    #[test]
+    fn formats_ast_output_before_writing_it() {
+        let dir = TestDir::new("formatted-output");
+        let files = vec![
+            super::RenderedAstFile {
+                path: dir.path().join("first.rs"),
+                rendered: "fn first".to_owned(),
+            },
+            super::RenderedAstFile {
+                path: dir.path().join("second.rs"),
+                rendered: "fn second".to_owned(),
+            },
+        ];
+
+        assert_eq!(
+            format_ast_output(&files, dir.path(), true),
+            concat!(
+                "== first.rs ==\n",
+                "fn first\n",
+                "== end first.rs ==\n",
+                "\n",
+                "== second.rs ==\n",
+                "fn second\n",
+                "== end second.rs ==\n",
+            )
+        );
+    }
+
+    #[test]
+    fn glob_root_accepts_windows_path_separators() {
+        assert_eq!(
+            split_glob_root(r"C:\work\src\*.rs"),
+            (PathBuf::from("C:/work/src"), "*.rs".to_owned())
+        );
+        assert_eq!(
+            split_glob_root(r"C:\work\src\**\*.ts"),
+            (PathBuf::from("C:/work/src"), "**/*.ts".to_owned())
+        );
+        assert_eq!(
+            split_glob_root(r"src\generated\*.py"),
+            (PathBuf::from("src/generated"), "*.py".to_owned())
+        );
+    }
+
+    #[test]
+    fn selectors_match_across_files_instead_of_requiring_every_file() {
+        let dir = TestDir::new("aggregate-selectors");
+        let first = dir.path().join("first.rs");
+        let middle = dir.path().join("middle.rs");
+        let last = dir.path().join("last.rs");
+        fs::write(&first, "fn first() {}\n").unwrap();
+        fs::write(&middle, "fn wanted() {}\n").unwrap();
+        fs::write(&last, "fn last() {}\n").unwrap();
+
+        let paths = [first.clone(), middle.clone(), last.clone()];
+        for (selector, expected_path) in [("first", first), ("wanted", middle), ("last", last)] {
+            let rendered = render_ast_files(
+                &paths,
+                dir.path(),
+                &AstSelector {
+                    item_patterns: vec![selector.to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap();
+
+            assert_eq!(rendered.len(), 1);
+            assert_eq!(rendered[0].path, expected_path);
+            assert_eq!(rendered[0].rendered, format!("fn {selector}"));
+        }
+    }
+
+    #[test]
+    fn selectors_fail_only_after_no_match_across_all_files() {
+        let dir = TestDir::new("aggregate-no-match");
+        let first = dir.path().join("first.rs");
+        let last = dir.path().join("last.rs");
+        fs::write(&first, "fn first() {}\n").unwrap();
+        fs::write(&last, "fn last() {}\n").unwrap();
+
+        let error = render_ast_files(
+            &[first, last],
+            dir.path(),
+            &AstSelector {
+                item_patterns: vec!["missing".to_owned()],
+                type_patterns: Vec::new(),
+            },
+            AstRenderOptions::default(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "no AST items matched selector -s missing across all input files"
+        );
+    }
+
+    #[test]
+    fn python_selectors_and_stub_globs_work_across_files() {
+        let dir = TestDir::new("python-stub-selectors");
+        let ordinary = dir.path().join("ordinary.py");
+        let stub = dir.path().join("service.pyi");
+        fs::write(&ordinary, "class Ordinary: pass\n").unwrap();
+        fs::write(
+            &stub,
+            "class Service:\n    def request(self, value: str) -> str: ...\n",
+        )
+        .unwrap();
+
+        let resolved = resolve_ast_inputs(&["*.py*".to_owned()], dir.path(), false).unwrap();
+        assert_eq!(
+            resolved.supported_files,
+            vec![ordinary.clone(), stub.clone()]
+        );
+
+        let rendered = render_ast_files(
+            &resolved.supported_files,
+            dir.path(),
+            &AstSelector {
+                item_patterns: Vec::new(),
+                type_patterns: vec!["Service".to_owned()],
+            },
+            AstRenderOptions {
+                include_signatures: true,
+                ..AstRenderOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(rendered.len(), 1);
+        assert_eq!(rendered[0].path, stub);
+        assert_eq!(
+            rendered[0].rendered,
+            "class Service:\n> def request(self, value: str) -> str:"
+        );
+    }
+
+    #[test]
+    fn syntax_errors_are_rejected_for_every_supported_parser_family() {
+        let dir = TestDir::new("syntax-errors");
+        let fixtures = [
+            ("broken.rs", "fn broken(\n"),
+            ("broken.py", "def broken(\n"),
+            ("broken.js", "function broken( {\n"),
+            ("broken.ts", "interface Broken<T {\n"),
+            ("broken.tsx", "const broken = <div>;\n"),
+        ];
+
+        for (name, source) in fixtures {
+            let path = dir.path().join(name);
+            fs::write(&path, source).unwrap();
+            let error = render_ast_files(
+                std::slice::from_ref(&path),
+                dir.path(),
+                &AstSelector::default(),
+                AstRenderOptions::default(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("source contains syntax errors"),
+                "unexpected error for {name}: {error}"
+            );
+            assert!(
+                error.contains("at zero-based "),
+                "missing syntax-error location for {name}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn multi_file_syntax_error_is_found_before_any_output_is_returned() {
+        let dir = TestDir::new("syntax-error-batch");
+        let valid = dir.path().join("valid.rs");
+        let broken = dir.path().join("broken.rs");
+        fs::write(&valid, "fn valid() {}\n").unwrap();
+        fs::write(&broken, "fn broken(\n").unwrap();
+
+        let error = render_ast_files(
+            &[valid, broken],
+            dir.path(),
+            &AstSelector::default(),
+            AstRenderOptions::default(),
+        )
+        .unwrap_err();
+
+        assert!(error.starts_with("broken.rs: source contains syntax errors"));
     }
 }

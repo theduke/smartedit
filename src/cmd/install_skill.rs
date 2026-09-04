@@ -1,31 +1,44 @@
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, ArgGroup, Args};
 
-use crate::cli_support::resolve_root;
+use crate::cli_support::{resolve_root, write_stdout};
 
 const SKILL_NAME: &str = "smartedit";
 const SKILL_CONTENT: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/skill/SKILL.md"));
 
 #[derive(Debug, Args)]
+#[command(
+    about = "Install the bundled smartedit agent skill",
+    long_about = "Install the bundled smartedit agent skill below a repository, a directory, or your user home.\n\nThe skill is written to .agents/skills/smartedit/SKILL.md below the selected root. The installed skill invokes `smartedit`, so the executable must remain available on PATH.",
+    after_help = "Examples:\n  smartedit install-skill --repo\n  smartedit install-skill --repo path/to/checkout\n  smartedit install-skill --dir path/to/project\n  smartedit install-skill --user"
+)]
 #[command(group(
     ArgGroup::new("target")
         .required(true)
         .args(["repo", "user", "dir"])
 ))]
 pub struct CmdInstallSkill {
+    /// Find the nearest Git repository from PATH, or from the current directory.
     #[arg(long, action = ArgAction::SetTrue)]
     pub repo: bool,
 
+    /// Install below the current user's cross-platform home directory.
     #[arg(long, action = ArgAction::SetTrue)]
     pub user: bool,
 
+    /// Install below PATH, or below the current directory when PATH is omitted.
     #[arg(long, action = ArgAction::SetTrue)]
     pub dir: bool,
 
-    #[arg(value_name = "PATH")]
+    /// Starting path for --repo or installation root for --dir.
+    #[arg(
+        value_name = "PATH",
+        help = "Starting path for --repo or root for --dir [default: current directory]"
+    )]
     pub path: Option<PathBuf>,
 }
 
@@ -49,8 +62,10 @@ impl CmdInstallSkill {
         };
 
         let skill_dir = install_skill(&install_root)?;
-        println!("Installed `{SKILL_NAME}` skill to {}", skill_dir.display());
-        Ok(())
+        write_stdout(&format!(
+            "Installed `{SKILL_NAME}` skill to {}\n",
+            skill_dir.display()
+        ))
     }
 }
 
@@ -67,9 +82,38 @@ fn install_skill(root: &Path) -> Result<PathBuf, String> {
 }
 
 fn resolve_user_root() -> Result<PathBuf, String> {
-    env::var_os("HOME")
+    resolve_user_root_from(|name| env::var_os(name), cfg!(windows))
+}
+
+fn resolve_user_root_from(
+    mut get_var: impl FnMut(&str) -> Option<OsString>,
+    is_windows: bool,
+) -> Result<PathBuf, String> {
+    if is_windows {
+        if let Some(profile) = nonempty_env_value(get_var("USERPROFILE")) {
+            return Ok(PathBuf::from(profile));
+        }
+        if let (Some(drive), Some(home_path)) = (
+            nonempty_env_value(get_var("HOMEDRIVE")),
+            nonempty_env_value(get_var("HOMEPATH")),
+        ) {
+            let mut combined = drive;
+            combined.push(home_path);
+            return Ok(PathBuf::from(combined));
+        }
+    }
+
+    nonempty_env_value(get_var("HOME"))
+        .or_else(|| nonempty_env_value(get_var("USERPROFILE")))
         .map(PathBuf::from)
-        .ok_or_else(|| "failed to resolve `$HOME`".to_owned())
+        .ok_or_else(|| {
+            "failed to resolve the user home from HOME, USERPROFILE, or HOMEDRIVE and HOMEPATH"
+                .to_owned()
+        })
+}
+
+fn nonempty_env_value(value: Option<OsString>) -> Option<OsString> {
+    value.filter(|value| !value.is_empty())
 }
 
 fn find_repo_root(start: &Path) -> Result<PathBuf, String> {
@@ -109,12 +153,16 @@ fn normalize_start_dir(path: &Path) -> Result<PathBuf, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{SKILL_CONTENT, find_repo_root, install_skill, normalize_start_dir};
+    use super::{
+        SKILL_CONTENT, find_repo_root, install_skill, normalize_start_dir, resolve_user_root_from,
+    };
 
     struct TestDir {
         path: PathBuf,
@@ -195,5 +243,54 @@ mod tests {
         let skill_file = dir.path().join(".agents/skills/smartedit/SKILL.md");
         assert_eq!(installed, dir.path().join(".agents/skills/smartedit"));
         assert_eq!(fs::read_to_string(skill_file).unwrap(), SKILL_CONTENT);
+    }
+
+    #[test]
+    fn user_root_uses_platform_precedence_and_ignores_empty_values() {
+        let variables = HashMap::from([
+            ("HOME", OsString::from("/home/tester")),
+            ("USERPROFILE", OsString::from(r"C:\Users\tester")),
+        ]);
+
+        assert_eq!(
+            resolve_user_root_from(|name| variables.get(name).cloned(), false).unwrap(),
+            PathBuf::from("/home/tester")
+        );
+        assert_eq!(
+            resolve_user_root_from(|name| variables.get(name).cloned(), true).unwrap(),
+            PathBuf::from(r"C:\Users\tester")
+        );
+
+        let variables = HashMap::from([
+            ("HOME", OsString::new()),
+            ("USERPROFILE", OsString::from(r"C:\Users\tester")),
+        ]);
+        assert_eq!(
+            resolve_user_root_from(|name| variables.get(name).cloned(), false).unwrap(),
+            PathBuf::from(r"C:\Users\tester")
+        );
+    }
+
+    #[test]
+    fn user_root_falls_back_to_windows_home_parts() {
+        let variables = HashMap::from([
+            ("HOMEDRIVE", OsString::from("C:")),
+            ("HOMEPATH", OsString::from(r"\Users\tester")),
+        ]);
+
+        assert_eq!(
+            resolve_user_root_from(|name| variables.get(name).cloned(), true).unwrap(),
+            PathBuf::from(r"C:\Users\tester")
+        );
+    }
+
+    #[test]
+    fn user_root_error_names_supported_environment_variables() {
+        let error = resolve_user_root_from(|_| None, true).unwrap_err();
+
+        assert!(error.contains("HOME"));
+        assert!(error.contains("USERPROFILE"));
+        assert!(error.contains("HOMEDRIVE"));
+        assert!(error.contains("HOMEPATH"));
     }
 }
