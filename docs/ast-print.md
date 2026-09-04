@@ -1,74 +1,201 @@
 # AST Print
 
-`smartedit ast-print` prints a compact outline of Rust, Python, JavaScript/JSX,
-TypeScript/TSX, and Go files.
+Supported languages:
+
+- Rust
+- Python
+- JavaScript (including JSX)
+- TypeScript (including TSX)
+- Go
+
+`smartedit ast-print` prints a structured outline of source files. It is meant for quickly understanding a file without reading it top to bottom.
+
+For Rust, the output can include items such as:
+
+- functions
+- structs
+- enums
+- traits
+- modules
+- `impl` blocks and their methods
+
+For Python, the output can include items such as:
+
+- classes
+- functions and `async` functions
+- nested methods, classes, and functions
+- module, class, and function docstrings with `--doc`
+
+For JavaScript and TypeScript, the output can include items such as:
+
+- classes and methods
+- functions, async functions, and generator functions
+- functions assigned to variables such as `const run = () => {}`
+- TypeScript interfaces, enums, and type aliases
+- leading file/item comments with `--doc`
+
+For Go, the output can include items such as:
+
+- functions and receiver methods
+- structs, interfaces, type definitions, and aliases
+- fields, interface members, and grouped declarations
+- leading file/item comments and directives with `--doc`
+
+You can use it to:
+
+- get a high-level overview of a file
+- inspect function signatures without full bodies
+- include full type or function bodies when needed
+- focus on a subset of items with selectors
+- print locations to jump to the relevant lines quickly
+
+## Basic Usage
+
+Print a simple outline:
 
 ```bash
 smartedit ast-print src/main.rs
-smartedit ast-print 'src/**/*.rs'
+```
+
+Include function and type signatures:
+
+```bash
+smartedit ast-print --signatures src/main.rs
+```
+
+Include full type bodies:
+
+```bash
+smartedit ast-print --type-bodies src/file_ast.rs
+```
+
+Include full function bodies:
+
+```bash
+smartedit ast-print --function-bodies src/file_ast.rs
+```
+
+Include both:
+
+```bash
+smartedit ast-print --type-bodies --function-bodies src/file_ast.rs
+```
+
+Show line ranges:
+
+```bash
+smartedit ast-print --loc src/file_ast.rs
+smartedit ast-print -l src/file_ast.rs
+```
+
+Locations are zero-based, half-open ranges. A range marked `shared-line` is informational and
+should not be used directly for line edits. If a file contains syntax errors, `ast-print` still
+renders recoverable structure but omits locations for that file.
+
+Show doc comments or docstrings:
+
+```bash
+smartedit ast-print --doc src/example.py
+smartedit ast-print --doc src/example.ts
+```
+
+## Multiple Files And Globs
+
+`ast-print` accepts file paths and glob patterns.
+
+Examples:
+
+```bash
 smartedit ast-print src/main.rs src/lib.rs
+smartedit ast-print 'src/**/*.rs'
+smartedit ast-print 'src/**/*.{py,pyi,js,jsx,ts,mts,cts,tsx,go}'
+smartedit ast-print '**/*'
 ```
 
-## Output options
+When you pass glob patterns, matched files respect ignore rules from files such as `.gitignore` and `.ignore` by default.
 
-- `--signatures` includes declaration signatures.
-- `--type-bodies` includes complete type-like declarations.
-- `--function-bodies` includes complete function declarations.
-- `--doc` includes owned documentation comments, leading comments, or docstrings.
-- `-l`, `--loc` includes source line ranges when they are safe to report.
-
-The outline covers the main declaration forms for each language, including nested and associated
-items, Python stubs, JavaScript object callables, TypeScript declaration files, and Go grouped
-declarations and receiver methods.
+Disable ignore filtering with:
 
 ```bash
-smartedit ast-print --signatures --doc src/example.py
-smartedit ast-print --type-bodies src/example.ts
-smartedit ast-print --function-bodies src/example.go
-```
-
-## Locations and incomplete files
-
-Locations are zero-based, half-open line ranges compatible with `smartedit apply`. For example,
-`[10-13]` covers lines 10 through 12. A `[10-13 shared-line]` range shares a boundary with other
-source and must not be passed directly to a line-edit operation.
-
-`ast-print` uses Tree-sitter recovery to produce useful output for incomplete or syntactically
-broken files. When a file contains syntax errors, `--loc` is omitted for that file because recovered
-node boundaries may not be safe edit targets. Other requested output is still rendered.
-
-## Files and globs
-
-Inputs may be paths or glob patterns:
-
-```bash
-smartedit ast-print 'src/**/*.{rs,py,pyi,js,jsx,ts,mts,cts,tsx,go}'
 smartedit ast-print --no-ignore 'src/**/*'
 ```
 
-Glob expansion respects ignore files by default. Unsupported matched files are skipped; the command
-fails when no supported files remain.
+Unsupported matched files are skipped. The command fails if no supported files remain.
 
 ## Selectors
 
-Use `-s`, `--select` for item paths and `-S`, `--type-select` for a type plus associated items.
-Patterns use glob syntax.
+Use selectors to print only part of a file.
+
+Item selectors with `-s` or `--select` match item paths using glob patterns.
+
+Example: print everything inside an inline module `xyz`:
 
 ```bash
-smartedit ast-print -s 'parser.*' --function-bodies src/parser.rs
-smartedit ast-print -S AstSelector --signatures --loc src/file_ast.rs
-smartedit ast-print -S Box --signatures --doc src/example.go
+smartedit ast-print -s 'xyz.*' src/file_ast.rs
 ```
 
-Qualified paths disambiguate duplicate names; bare names retain basename matching. Go receiver
-methods use paths such as `Box.Get`. Selectors aggregate across all input files, skipping files
-without a match and failing only when nothing matches.
+Type selectors with `-S` or `--type-select` match a type and its associated items, such as `impl` or receiver methods.
 
-## Notes
+Example: print the definition of `S1` and methods associated with it:
 
-- Rust local-item discovery covers declarations directly inside a function body, not declarations
-  nested in expression blocks such as `if` or `match`.
-- Go grouped specs and multi-name declarations are independently selectable. Shared source spans
-  are marked `shared-line`.
-- Full-body output preserves source that affects declaration behavior, such as attributes,
-  decorators, and Go directives.
+```bash
+smartedit ast-print -S S1 src/file_ast.rs
+```
+
+Type selectors also work for Python classes, JavaScript classes, TypeScript interfaces/classes,
+and Go types. Qualified paths can disambiguate duplicate names. Across multiple input files,
+files without a selector match are skipped; the command fails only if nothing matches.
+
+Selectors can be combined with the other formatting flags:
+
+```bash
+smartedit ast-print -S S1 --signatures --loc src/file_ast.rs
+smartedit ast-print -s 'parser.*' --function-bodies src/parser.rs
+```
+
+## Common Workflows
+
+Quick overview of a Rust file:
+
+```bash
+smartedit ast-print src/lib.rs
+```
+
+Quick overview of a Python or JavaScript file:
+
+```bash
+smartedit ast-print src/example.py
+smartedit ast-print src/example.js
+```
+
+Review public APIs and signatures across a directory:
+
+```bash
+smartedit ast-print --signatures 'src/**/*.rs'
+smartedit ast-print --signatures 'src/**/*.{ts,tsx}'
+```
+
+Inspect one type and its methods with line locations:
+
+```bash
+smartedit ast-print -S AstSelector --signatures --loc src/file_ast.rs
+```
+
+Inspect the full implementation of a specific module subtree:
+
+```bash
+smartedit ast-print -s 'cmd.ast_print.*' --function-bodies src/main.rs src/cmd/ast_print.rs
+```
+
+Inspect one JavaScript or TypeScript type with nested methods:
+
+```bash
+smartedit ast-print -S Greeter --signatures --doc src/example.ts
+smartedit ast-print -S Greeter --signatures src/example.js
+```
+
+Inspect a Go type with fields and receiver methods:
+
+```bash
+smartedit ast-print -S Box --signatures --doc src/example.go
+```
