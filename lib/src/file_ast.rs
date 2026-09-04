@@ -5922,7 +5922,7 @@ fn parse_scala_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         "class_definition" => (AstItemKind::Class, "class"),
         "object_definition" => (AstItemKind::Class, "object"),
         "trait_definition" => (AstItemKind::Trait, "trait"),
-        "function_definition" => (AstItemKind::Function, "def"),
+        "function_definition" | "function_declaration" => (AstItemKind::Function, "def"),
         _ => return None,
     };
 
@@ -5983,7 +5983,9 @@ fn parse_java_item(node: Node<'_>, source: &str) -> Option<AstItem> {
             (AstItemKind::Interface, "interface")
         }
         "enum_declaration" => (AstItemKind::Enum, "enum"),
-        "method_declaration" | "constructor_declaration" => (AstItemKind::Function, "method"),
+        "method_declaration"
+        | "constructor_declaration"
+        | "annotation_type_element_declaration" => (AstItemKind::Function, "method"),
         _ => return None,
     };
 
@@ -6045,16 +6047,15 @@ fn parse_kotlin_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         _ => return None,
     };
 
-    let name = child_text_by_field(node, "identifier", source)
-        .or_else(|| {
-            let mut cursor = node.walk();
-            node.children(&mut cursor)
-                .find(|c| c.kind() == "type_identifier" || c.kind() == "simple_identifier")
-                .map(|c| trimmed_node_text(c, source))
-        })
-        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
 
-    let body = node.child_by_field_name("body");
+    let body = {
+        let mut cursor = node.walk();
+        node.children(&mut cursor).find(|c| {
+            c.kind() == "class_body" || c.kind() == "function_body" || c.kind() == "block"
+        })
+    };
 
     Some(AstItem {
         kind,

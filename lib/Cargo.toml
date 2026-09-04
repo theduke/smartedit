@@ -6,6 +6,7 @@ description.workspace = true
 license.workspace = true
 repository.workspace = true
 readme.workspace = true
+exclude = ["tests/fixtures/*"]
 
 [dependencies]
 chumsky = "0.13.0"
