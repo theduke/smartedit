@@ -31,6 +31,11 @@ pub enum SmartEditError {
         first_modification: usize,
         second_modification: usize,
     },
+    OverlappingDestructiveEdits {
+        path: PathBuf,
+        first_modification: usize,
+        second_modification: usize,
+    },
     MissingFile {
         path: PathBuf,
     },
@@ -131,7 +136,22 @@ impl fmt::Display for SmartEditError {
             } => {
                 write!(
                     f,
-                    "modification {second_modification} conflicts with modification {first_modification} on {}",
+                    "modification {} conflicts with modification {} on {}",
+                    second_modification + 1,
+                    first_modification + 1,
+                    path.display()
+                )
+            }
+            SmartEditError::OverlappingDestructiveEdits {
+                path,
+                first_modification,
+                second_modification,
+            } => {
+                write!(
+                    f,
+                    "modification {} destructively overlaps modification {} in {}",
+                    second_modification + 1,
+                    first_modification + 1,
                     path.display()
                 )
             }
@@ -255,5 +275,35 @@ impl std::error::Error for SmartEditError {
             SmartEditError::InvalidUtf8 { source, .. } => Some(source),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::SmartEditError;
+
+    #[test]
+    fn conflict_diagnostics_use_one_based_modification_numbers() {
+        let conflict = SmartEditError::ConflictingActionTargets {
+            path: PathBuf::from("target.txt"),
+            first_modification: 0,
+            second_modification: 2,
+        };
+        let overlap = SmartEditError::OverlappingDestructiveEdits {
+            path: PathBuf::from("target.txt"),
+            first_modification: 1,
+            second_modification: 3,
+        };
+
+        assert_eq!(
+            conflict.to_string(),
+            "modification 3 conflicts with modification 1 on target.txt"
+        );
+        assert_eq!(
+            overlap.to_string(),
+            "modification 4 destructively overlaps modification 2 in target.txt"
+        );
     }
 }

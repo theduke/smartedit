@@ -84,21 +84,28 @@ fn build_program(
 
 fn program_parser<'src>()
 -> impl Parser<'src, &'src str, Vec<ParsedStatement>, extra::Err<Rich<'src, char>>> {
-    let newline = just('\n');
+    let newline = choice((just("\r\n").ignored(), just('\n').ignored()));
     let horizontal_ws = one_of(" \t").repeated().ignored();
     let comment = just('#')
-        .then(any().and_is(newline.not()).repeated())
+        .then(
+            any()
+                .filter(|character: &char| !matches!(character, '\r' | '\n'))
+                .repeated(),
+        )
         .ignored();
     let line_end = horizontal_ws
         .then(comment.or_not())
         .ignored()
-        .then_ignore(choice((newline.ignored(), end())));
+        .then_ignore(choice((newline, end())));
 
-    let empty_line = horizontal_ws
-        .then(comment.or_not())
-        .ignored()
-        .then_ignore(newline)
-        .to(None::<ParsedStatement>);
+    let empty_line = choice((
+        horizontal_ws
+            .ignore_then(comment)
+            .then_ignore(choice((newline, end())))
+            .ignored(),
+        horizontal_ws.then_ignore(newline).ignored(),
+    ))
+    .to(None::<ParsedStatement>);
 
     let statement = choice((
         mode_parser().map(Some),
@@ -290,7 +297,7 @@ fn path_spec_parser<'src>() -> impl Parser<'src, &'src str, PathSpec, extra::Err
 {
     choice((
         regex_literal_parser().map(ParsedPathToken::Regex),
-        path_token_parser().map(ParsedPathToken::Plain),
+        path_operand_parser().map(ParsedPathToken::Plain),
     ))
     .map_with(|token, e| match token {
         ParsedPathToken::Plain(token) => {
@@ -305,7 +312,7 @@ fn path_spec_parser<'src>() -> impl Parser<'src, &'src str, PathSpec, extra::Err
 
 fn path_destination_parser<'src>()
 -> impl Parser<'src, &'src str, PathDestination, extra::Err<Rich<'src, char>>> {
-    path_token_parser().map_with(|token, e| {
+    path_operand_parser().map_with(|token, e| {
         PathDestination::directory(PathBuf::from(token))
             .with_span(Span::new(e.span().start, e.span().end))
     })
@@ -409,7 +416,7 @@ fn string_literal_parser<'src>()
 
 fn path_token_parser<'src>() -> impl Parser<'src, &'src str, String, extra::Err<Rich<'src, char>>> {
     any()
-        .filter(|c: &char| !matches!(c, ' ' | '\t' | '\n' | '\r' | '#'))
+        .filter(|c: &char| !matches!(c, ' ' | '\t' | '\n' | '\r' | '#' | '"'))
         .repeated()
         .at_least(1)
         .collect::<String>()
@@ -417,11 +424,23 @@ fn path_token_parser<'src>() -> impl Parser<'src, &'src str, String, extra::Err<
 
 fn path_text_target_parser<'src>()
 -> impl Parser<'src, &'src str, String, extra::Err<Rich<'src, char>>> {
-    any()
-        .filter(|c: &char| !matches!(c, ' ' | '\t' | '\n' | '\r' | '#' | ':'))
+    let path_tail = any()
+        .filter(|c: &char| !matches!(c, ' ' | '\t' | '\n' | '\r' | '#' | ':' | '"'))
         .repeated()
         .at_least(1)
-        .collect::<String>()
+        .collect::<String>();
+    let drive_path = any()
+        .filter(char::is_ascii_alphabetic)
+        .then_ignore(just(':'))
+        .then(path_tail)
+        .map(|(drive, tail)| format!("{drive}:{tail}"));
+
+    choice((string_literal_parser(), drive_path, path_tail))
+}
+
+fn path_operand_parser<'src>() -> impl Parser<'src, &'src str, String, extra::Err<Rich<'src, char>>>
+{
+    choice((string_literal_parser(), path_token_parser()))
 }
 
 fn path_spec_from_plain_token(token: &str, span: Span) -> PathSpec {
@@ -430,8 +449,8 @@ fn path_spec_from_plain_token(token: &str, span: Span) -> PathSpec {
         return PathSpec::glob(root, pattern).with_span(span);
     }
 
-    if token.ends_with('/') {
-        let root = token.trim_end_matches('/');
+    if token.ends_with(['/', '\\']) {
+        let root = token.trim_end_matches(['/', '\\']);
         return PathSpec::files_in_directory(normalize_empty_path(root)).with_span(span);
     }
 
@@ -443,20 +462,22 @@ fn looks_like_glob(token: &str) -> bool {
 }
 
 fn split_glob_root(token: &str) -> (PathBuf, String) {
-    let segments: Vec<&str> = token.split('/').collect();
-    let wildcard_index = segments
-        .iter()
-        .position(|segment| segment.contains('*') || segment.contains('?') || segment.contains('['))
-        .unwrap_or(segments.len());
-
-    let root = if wildcard_index == 0 {
-        PathBuf::from(".")
-    } else {
-        PathBuf::from(segments[..wildcard_index].join("/"))
+    let wildcard_index = token
+        .char_indices()
+        .find_map(|(index, character)| matches!(character, '*' | '?' | '[').then_some(index))
+        .unwrap_or(token.len());
+    let prefix = &token[..wildcard_index];
+    let Some(separator_index) = prefix.rfind(['/', '\\']) else {
+        return (PathBuf::from("."), token.to_owned());
     };
-    let pattern = segments[wildcard_index..].join("/");
+    let root = if separator_index == 0 {
+        &token[..1]
+    } else {
+        &token[..separator_index]
+    };
+    let pattern = &token[separator_index + 1..];
 
-    (normalize_empty_path(root), pattern)
+    (normalize_empty_path(root), pattern.replace('\\', "/"))
 }
 
 fn split_regex_root(pattern: &str) -> (PathBuf, String) {
@@ -477,12 +498,14 @@ fn split_regex_root(pattern: &str) -> (PathBuf, String) {
         chars.next();
     }
 
-    let root = prefix
-        .rfind('/')
-        .map(|index| &prefix[..index])
-        .unwrap_or("");
+    let Some(separator_index) = prefix.rfind('/') else {
+        return (PathBuf::from("."), pattern.to_owned());
+    };
 
-    (normalize_empty_path(root), pattern.to_owned())
+    let root = &prefix[..separator_index];
+    let relative_pattern = &pattern[separator_index + 1..];
+
+    (normalize_empty_path(root), relative_pattern.to_owned())
 }
 
 fn normalize_empty_path(path: impl Into<PathBuf>) -> PathBuf {
@@ -496,7 +519,7 @@ fn normalize_empty_path(path: impl Into<PathBuf>) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::edit::{
         GenericModification, Modification, PathDestinationKind, PathSpecKind, ProgramMode,
@@ -634,5 +657,243 @@ r r"a/[a-z]+\.rs"
             }
             other => panic!("unexpected modification: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_crlf_and_mixed_line_endings() {
+        let source = "# windows\r\nld a.txt:0-1\r\n\r\n# unix next\nli b.txt:0 \"x\\n\"\r\n";
+
+        let program = parse_edit_program(source).unwrap();
+
+        assert_eq!(program.modification_count(), 2);
+    }
+
+    #[test]
+    fn parses_a_final_comment_without_a_newline() {
+        let program = parse_edit_program("ld a.txt:0-1\n# final comment").unwrap();
+
+        assert_eq!(program.modification_count(), 1);
+    }
+
+    #[test]
+    fn regex_source_prefix_is_removed_from_the_root_relative_pattern() {
+        let program = parse_edit_program(r#"r r"src/generated/[a-z_]+\.rs""#).unwrap();
+
+        match &program.modifications()[0] {
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. }) => {
+                assert!(matches!(
+                    &targets.kind,
+                    PathSpecKind::Regex { root, pattern }
+                        if root == &PathBuf::from("src/generated")
+                            && pattern == r#"[a-z_]+\.rs"#
+                ));
+            }
+            other => panic!("unexpected modification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn anchored_regex_source_keeps_its_full_pattern() {
+        let program = parse_edit_program(r#"r r"^src/[a-z_]+\.rs$""#).unwrap();
+
+        match &program.modifications()[0] {
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. }) => {
+                assert!(matches!(
+                    &targets.kind,
+                    PathSpecKind::Regex { root, pattern }
+                        if root == &PathBuf::from(".") && pattern == r#"^src/[a-z_]+\.rs$"#
+                ));
+            }
+            other => panic!("unexpected modification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_windows_drive_letter_line_targets() {
+        let program = parse_edit_program(
+            r#"ld C:\work\src\main.rs:0-2
+li D:/output.txt:1 "line\n""#,
+        )
+        .unwrap();
+
+        match &program.modifications()[0] {
+            Modification::Generic(GenericModification::DeleteRanges { target, .. }) => {
+                assert_eq!(target.path, PathBuf::from(r"C:\work\src\main.rs"));
+            }
+            other => panic!("unexpected modification: {other:?}"),
+        }
+        match &program.modifications()[1] {
+            Modification::Generic(GenericModification::InsertLines { target, .. }) => {
+                assert_eq!(target.path, PathBuf::from("D:/output.txt"));
+            }
+            other => panic!("unexpected modification: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_native_separator_glob_and_directory_roots() {
+        let program = parse_edit_program(
+            r#"r C:\work\src\*.rs
+r C:\work\cache\"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &program.modifications()[0],
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. })
+                if matches!(
+                    &targets.kind,
+                    PathSpecKind::Glob { root, pattern }
+                        if root == &PathBuf::from(r"C:\work\src") && pattern == "*.rs"
+                )
+        ));
+        assert!(matches!(
+            &program.modifications()[1],
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. })
+                if matches!(
+                    &targets.kind,
+                    PathSpecKind::FilesInDirectory { root, .. }
+                        if root == &PathBuf::from(r"C:\work\cache")
+                )
+        ));
+    }
+
+    #[test]
+    fn parses_quoted_path_specs_and_destinations() {
+        let program = parse_edit_program(
+            r#"m "source dir/*.rs" "destination #1/"
+r "recursive #1/"
+tr "exact #1.txt" "old" "new""#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &program.modifications()[0],
+            Modification::Generic(GenericModification::MoveFiles {
+                sources,
+                destination_dir,
+                ..
+            }) if matches!(
+                &sources.kind,
+                PathSpecKind::Glob { root, pattern }
+                    if root == &PathBuf::from("source dir") && pattern == "*.rs"
+            ) && matches!(
+                &destination_dir.kind,
+                PathDestinationKind::Directory { path }
+                    if path == &PathBuf::from("destination #1/")
+            )
+        ));
+        assert!(matches!(
+            &program.modifications()[1],
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. })
+                if matches!(
+                    &targets.kind,
+                    PathSpecKind::FilesInDirectory { root, .. }
+                        if root == &PathBuf::from("recursive #1")
+                )
+        ));
+        assert!(matches!(
+            &program.modifications()[2],
+            Modification::Generic(GenericModification::TextReplace { targets, .. })
+                if matches!(
+                    &targets.kind,
+                    PathSpecKind::ExactFile { path }
+                        if path == &PathBuf::from("exact #1.txt")
+                )
+        ));
+    }
+
+    #[test]
+    fn parses_quoted_paths_for_every_text_target() {
+        let program = parse_edit_program(
+            r#"lm "C:\\Program Files\\source #1.txt":0-2 "D:\\Output\\target #1.txt":1
+ld "delete #1.txt":2-3
+li "insert #1.txt":4 "line\n"
+lr "replace #1.txt":5-6 "line\n"
+ldm "match #1.txt" r"^drop$""#,
+        )
+        .unwrap();
+
+        match &program.modifications()[0] {
+            Modification::Generic(GenericModification::MoveRanges {
+                source,
+                destination,
+                ..
+            }) => {
+                assert_eq!(
+                    source.path,
+                    PathBuf::from(r"C:\Program Files\source #1.txt")
+                );
+                assert_eq!(destination.path, PathBuf::from(r"D:\Output\target #1.txt"));
+            }
+            other => panic!("unexpected modification: {other:?}"),
+        }
+
+        for (index, expected) in [
+            (1, "delete #1.txt"),
+            (2, "insert #1.txt"),
+            (3, "replace #1.txt"),
+        ] {
+            let actual = match &program.modifications()[index] {
+                Modification::Generic(GenericModification::DeleteRanges { target, .. }) => {
+                    &target.path
+                }
+                Modification::Generic(GenericModification::InsertLines { target, .. }) => {
+                    &target.path
+                }
+                Modification::Generic(GenericModification::ReplaceRanges { target, .. }) => {
+                    &target.path
+                }
+                other => panic!("unexpected modification: {other:?}"),
+            };
+            assert_eq!(actual, &PathBuf::from(expected));
+        }
+
+        assert!(matches!(
+            &program.modifications()[4],
+            Modification::Generic(GenericModification::DeleteLinesMatching { target, .. })
+                if target.path.as_path() == Path::new("match #1.txt")
+                    && target.pattern == "^drop$"
+        ));
+    }
+
+    #[test]
+    fn quoted_paths_use_standard_string_escapes_without_changing_unquoted_paths_or_regexes() {
+        let program = parse_edit_program(
+            r#"r plain/path.txt
+r C:\work\src\*.rs
+r r"src/[a-z_]+\.rs"
+ld "quote\" and tab\t.txt":0-1"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            &program.modifications()[0],
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. })
+                if matches!(
+                    &targets.kind,
+                    PathSpecKind::ExactFile { path }
+                        if path == &PathBuf::from("plain/path.txt")
+                )
+        ));
+        assert!(matches!(
+            &program.modifications()[1],
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. })
+                if matches!(
+                    &targets.kind,
+                    PathSpecKind::Glob { root, pattern }
+                        if root == &PathBuf::from(r"C:\work\src") && pattern == "*.rs"
+                )
+        ));
+        assert!(matches!(
+            &program.modifications()[2],
+            Modification::Generic(GenericModification::DeleteFiles { targets, .. })
+                if matches!(&targets.kind, PathSpecKind::Regex { .. })
+        ));
+        assert!(matches!(
+            &program.modifications()[3],
+            Modification::Generic(GenericModification::DeleteRanges { target, .. })
+                if target.path.as_path() == Path::new("quote\" and tab\t.txt")
+        ));
     }
 }

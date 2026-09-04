@@ -14,10 +14,10 @@ pub use edit::{
 pub use error::{Result, SmartEditError};
 pub use executor::Executor;
 pub use file_ast::{
-    AstItem, AstItemKind, AstLanguage, AstLocationRange, AstRenderOptions, AstSelector, FileAst,
-    parse_file_ast,
+    AstItem, AstItemKind, AstLanguage, AstLocationRange, AstRenderOptions, AstSelector,
+    AstSyntaxErrorLocation, FileAst, parse_file_ast,
 };
 pub use fs::{FileSystem, OsFileSystem};
 pub use parser::{ParseError, parse_edit_program};
-pub use plan::{EvaluationPlan, ExecutionMode, ExecutionOptions, PlannedAction};
+pub use plan::{EvaluationPlan, ExecutionOptions, PlannedAction};
 pub use span::Span;
