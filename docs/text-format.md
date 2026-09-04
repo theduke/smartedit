@@ -50,9 +50,7 @@ Within one snapshot stage:
 - line ranges are read from the original contents of the source file in that snapshot
 - destination file contents are also taken from that snapshot
 - multiple text edits that affect the same file are merged into one final write
-- hard-linked names for the same existing file are merged just like symbolic-link aliases;
-  independent whole-file writes through two hard links are rejected as conflicting
-- lexical aliases such as `a.txt`, `./a.txt`, and `dir/../a.txt` identify the same file
+- aliases for the same file, including symbolic and hard links, are merged safely
 - later operations in the same stage do not see earlier operations' results
 
 Example:
@@ -75,25 +73,8 @@ Both inserts are planned against the same original contents of `out.txt`, then m
 
 When multiple inserts target the same destination offset in the same snapshot stage, they are applied in modification order.
 
-Overlapping plain deletions are coalesced. A move or replacement source may not overlap a
-destructive range from another modification in the same snapshot stage; such a plan is rejected
-instead of duplicating moved text or concatenating competing replacements. Adjacent ranges do not
-overlap.
-
-Path identity is normalized for merging and conflict detection. Relative paths are resolved from
-the process working directory, so an absolute path and its equivalent relative path identify the
-same target. Existing parents are canonicalized before any nonexistent remainder is appended, so
-`..` is interpreted correctly after traversing a symbolic link. Text reads and writes canonicalize
-the complete existing file, which merges a symlink with its content target; moves and deletes keep
-the final component as an entry name so they still target the symbolic link itself. No additional
-case folding is attempted for nonexistent paths; existing-path casing follows the platform's
-canonicalization behavior.
-
-Plans capture the identity of existing files selected for overwrite or deletion. The OS filesystem
-checks that identity again before truncating or removing an entry, so a path replaced after planning
-is left untouched and execution fails. Custom `FileSystem` implementations opt into this protection
-by implementing the identity methods and checked write/delete methods; the default methods retain
-compatibility but cannot provide an atomic host-filesystem identity guarantee.
+Overlapping deletions are coalesced. Conflicting destructive edits, file targets, and path aliases
+are rejected during planning rather than applied ambiguously.
 
 ### Incremental Mode
 
@@ -183,27 +164,13 @@ m r"src/[a-z_]+\.rs" filtered/
 Semantics:
 
 - the source spec is resolved during planning
-- each matched file is represented as one move action, without loading its contents into the plan
-- non-overwrite moves install the destination with an atomic no-replace filesystem operation, so
-  an existing file or dangling symbolic link is never clobbered
-- same-filesystem regular-file moves preserve inode metadata; across filesystems, regular files
-  use an exclusive copy that reapplies platform-supported permissions after writing (including
-  Unix setuid/setgid bits), followed by source deletion
-- symbolic links remain symbolic links: when a direct filesystem move is unavailable, the link is
-  recreated with the same link target and the source link is removed
-- exact specs treat a final symbolic link as the selected entry, including dangling links and links
-  to directories; directory and glob scans include symbolic-link entries but do not recursively
-  traverse child directory links (an explicitly named directory-root link is followed)
-- where supported, cross-filesystem copies use an anonymous staging inode and publish that exact
-  open file with an atomic no-replace operation; the portable fallback copies through an
-  exclusively created destination and verifies its file identity before removing the source
-- library callers that enable overwrite get consistent replacement behavior on Windows and Unix;
-  the existing destination is moved to a temporary sibling and restored if the source move fails;
-  the retained backup identity is checked before either restoration or cleanup
+- existing destinations are not overwritten
+- regular-file moves preserve platform-supported permissions
+- symbolic links are moved as links, including dangling links and links to directories
+- child directory links found by a scan are not traversed
 - relative paths below the match root are preserved
 - destination parent directories are created as needed
 - planning fails if no files match
-- planning fails if a destination file already exists
 
 Example:
 
@@ -458,19 +425,13 @@ Supported forms:
 
 ### Path Operands
 
-Every path operand can be an unquoted token or an ordinary double-quoted string. Quote a path when
-it contains whitespace, `#`, or `;`. Quoted paths use the same escapes as other string literals:
-`\n`, `\r`, `\t`, `\"`, and `\\`. A Windows backslash must therefore be doubled inside a quoted
-path, while existing unquoted Windows paths keep their native spelling.
+Paths may be unquoted tokens or double-quoted strings. Quote paths containing whitespace, `#`, or
+`;`. Quoted paths use the normal string escapes, so Windows backslashes must be doubled.
 
 ```text
 "source files/input #1.txt"
 "C:\\Program Files\\project\\input.txt"
 ```
-
-After a quoted path is decoded, it is classified exactly like an unquoted path: a trailing `/` or
-`\` denotes a recursive directory source, and `*`, `?`, or `[` makes it a glob. Regex source specs
-remain distinct and use `r"..."` syntax.
 
 ### Exact File
 
@@ -528,31 +489,19 @@ Regex specs use Rust-style raw string syntax:
 r"src/[a-z_]+\.rs"
 ```
 
-The planner infers a root directory from the literal prefix before the pattern becomes dynamic,
-removes that directory prefix from the regex, then matches the remaining regex against normalized
-relative paths beneath that root. For example, `r"src/[a-z_]+\.rs"` uses root `src` and matches
-`r"[a-z_]+\.rs"` against paths below it.
-
-Regex matching uses `/` as the normalized separator.
+Regexes match normalized `/`-separated paths beneath their inferred search root.
 
 ## Inline Command-Line Programs
 
-When operations are passed directly to `smartedit apply`, a semicolon outside a quoted string,
-raw regex, or comment separates statements. Semicolons inside strings and regexes are data and are
-preserved:
+For inline programs, semicolons outside strings, regexes, and comments separate statements:
 
 ```console
 smartedit apply 'li a.txt:0 "key;value\n"; ldm b.txt r"^x;y$"'
 smartedit apply 'ld "notes; archived/#1.txt":0-1'
 ```
 
-A semicolon also ends an inline comment and begins the next statement, matching the historical
-command-line behavior.
-
 Choose exactly one input source: positional inline operations, `--file PATH` (use `-` for stdin),
-or piped stdin. `--file` and positional operations cannot be combined. Empty input and programs
-containing only whitespace, comments, `mode`, or `apply` directives are rejected because they
-contain no modifications.
+or piped stdin. Empty programs and programs without modifications are rejected.
 
 `--root DIR` changes the working directory used to resolve relative paths. It is not a containment
 boundary: absolute paths, `..`, and symbolic links may still address paths outside that directory.
@@ -571,10 +520,7 @@ Rules:
 - `start-end` means `[start, end)`
 - offsets are `usize` line indices
 - ranges should be sorted and non-overlapping
-- a leading Windows drive colon is part of the path, so `C:\work\file.txt:10-20` targets
-  `C:\work\file.txt` and uses the final colon as the range separator
-- for a quoted Windows path, escape its backslashes and put the range separator after the closing
-  quote: `"C:\\Program Files\\work.txt":10-20`
+- Windows drive colons are part of the path; the final colon separates the line range
 
 ## String Literals
 
@@ -616,26 +562,9 @@ There is currently no plain-token escape syntax for `#`, so it should not appear
 
 Parsing produces a span-aware AST.
 
-Planning:
-
-- resolves path specs into concrete files
-- validates that operations are possible
-- rejects incompatible file/directory target topologies, including a planned file whose path is an
-  ancestor of another planned target
-- validates existing target kinds even when overwrite behavior is enabled
-- carries overwrite intent into planned writes; non-overwrite file creation uses an exclusive
-  create operation, so a file appearing after planning is not truncated
-- produces a batch of concrete filesystem actions
-
-Execution applies that planned batch in order. It is explicitly best-effort, not transactional: if
-a filesystem action fails, earlier successful actions are not rolled back. Snapshot and incremental
-describe how modifications are evaluated, not rollback behavior.
-If a move publishes its destination but cannot remove the source, both entries are left in place;
-this recoverable duplicate is safer than deleting a pathname another process may have replaced.
-Source and overwrite-backup identities are checked immediately before pathname removal. Portable
-filesystems do not provide an atomic compare-and-unlink operation, so an adversarial process with
-write access to the same directory can still replace an entry in the interval between that check
-and removal.
+Planning resolves paths, validates conflicts, and produces concrete filesystem actions. Execution
+applies those actions in order and is best-effort, not transactional: an error does not roll back
+earlier successful actions. Snapshot and incremental describe evaluation visibility, not rollback.
 
 This separation makes dry runs possible and allows validation before writing files.
 

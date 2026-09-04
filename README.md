@@ -79,10 +79,7 @@ Install it into a specific directory:
 smartedit install-skill --dir path/to/project
 ```
 
-This writes `SKILL.md` to `.agents/skills/smartedit` under the chosen root. User-home
-installation works with Unix `HOME` and Windows `USERPROFILE` or
-`HOMEDRIVE`/`HOMEPATH`. The installed skill invokes `smartedit`, so the executable
-must remain available on `PATH` when an agent uses it.
+This writes `SKILL.md` to `.agents/skills/smartedit` under the chosen root.
 
 ## Agent-Driven Usage
 
@@ -98,13 +95,6 @@ Typical agent scenarios:
 - An agent finds a function with `--loc`, then replaces only that function body.
 - An agent scans signatures across a glob to understand a subsystem without paying to read every file in full.
 - A repo installs the bundled skill so agents default to `smartedit` first and fall back only when needed.
-
-## Develop
-
-The Nix flake check runs tests for the complete Cargo workspace, including the
-`smartedit` library and CLI. GitHub CI runs the same workspace tests on Linux and
-Windows; the Windows job also exercises native user-home installation and CRLF
-edit-program input.
 
 ### Release Automation
 
