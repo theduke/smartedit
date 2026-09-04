@@ -662,7 +662,12 @@ fn parse_function_item(node: Node<'_>, docs: &RustDocContext<'_>) -> AstItem {
         body: Some(trimmed_node_text(node, source)),
         children: node
             .child_by_field_name("body")
-            .map(|body| collect_supported_items(body, docs))
+            .map(|body| {
+                collect_supported_items(body, docs)
+                    .into_iter()
+                    .filter(|item| item.kind != AstItemKind::MacroInvocation)
+                    .collect()
+            })
             .unwrap_or_default(),
     }
 }
@@ -3475,6 +3480,21 @@ func (g Greeter) Greet(name string) string {
     }
 
     #[test]
+    fn rust_function_body_macro_invocations_require_function_bodies() {
+        let source = "fn checked() {\n    assert_eq!(1, 1);\n}\n";
+        let ast = FileAst::parse(AstLanguage::Rust, source).unwrap();
+
+        assert_eq!(ast.render(AstRenderOptions::default()), "fn checked");
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_function_bodies: true,
+                ..AstRenderOptions::default()
+            }),
+            source.trim()
+        );
+    }
+
+    #[test]
     fn renders_signatures_when_requested() {
         let ast = FileAst::parse(AstLanguage::Rust, SAMPLE).unwrap();
 
@@ -3822,7 +3842,7 @@ func (g Greeter) Greet(name string) string {
     }
 
     #[test]
-    fn rust_public_api_and_local_items_are_represented() {
+    fn rust_public_api_and_local_declarations_are_represented() {
         let source = "pub use crate::api::Thing;\n#[macro_export]\nmacro_rules! exported { () => {} }\nunsafe extern \"C\" {\n    pub safe fn foreign(value: i32) -> i32;\n    pub static FOREIGN: i32;\n}\nfn outer() {\n    fn local() {}\n    local_macro!();\n}\n";
         let ast = FileAst::parse(AstLanguage::Rust, source).unwrap();
         let rendered = ast.render(AstRenderOptions {
@@ -3835,7 +3855,7 @@ func (g Greeter) Greet(name string) string {
         assert!(rendered.contains("> pub safe fn foreign(value: i32) -> i32;"));
         assert!(rendered.contains("> pub static FOREIGN: i32;"));
         assert!(rendered.contains("> fn local()"));
-        assert!(rendered.contains("> local_macro!();"));
+        assert!(!rendered.contains("local_macro"));
     }
 
     #[test]
