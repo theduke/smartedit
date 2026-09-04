@@ -36,10 +36,10 @@ For JavaScript and TypeScript, the output can include items such as:
 
 For Go, the output can include items such as:
 
-- functions and methods
-- structs, interfaces, and type aliases
-- const and var declarations
-- leading file/item comments with `--doc`
+- functions and receiver methods
+- structs, interfaces, type definitions, and aliases
+- fields, interface members, and grouped declarations
+- leading file/item comments and directives with `--doc`
 
 You can use it to:
 
@@ -88,6 +88,10 @@ smartedit ast-print --loc src/file_ast.rs
 smartedit ast-print -l src/file_ast.rs
 ```
 
+Locations are zero-based, half-open ranges. A range marked `shared-line` is informational and
+should not be used directly for line edits. If a file contains syntax errors, `ast-print` still
+renders recoverable structure but omits locations for that file.
+
 Show doc comments or docstrings:
 
 ```bash
@@ -104,7 +108,7 @@ Examples:
 ```bash
 smartedit ast-print src/main.rs src/lib.rs
 smartedit ast-print 'src/**/*.rs'
-smartedit ast-print 'src/**/*.{py,js,jsx,ts,tsx}'
+smartedit ast-print 'src/**/*.{py,pyi,js,jsx,ts,mts,cts,tsx,go}'
 smartedit ast-print '**/*'
 ```
 
@@ -116,7 +120,7 @@ Disable ignore filtering with:
 smartedit ast-print --no-ignore 'src/**/*'
 ```
 
-If a glob matches files for unsupported languages or formats, they are reported as ignored and skipped.
+Unsupported matched files are skipped. The command fails if no supported files remain.
 
 ## Selectors
 
@@ -130,7 +134,7 @@ Example: print everything inside an inline module `xyz`:
 smartedit ast-print -s 'xyz.*' src/file_ast.rs
 ```
 
-Type selectors with `-S` or `--type-select` match a type and its associated items, such as `impl` methods.
+Type selectors with `-S` or `--type-select` match a type and its associated items, such as `impl` or receiver methods.
 
 Example: print the definition of `S1` and methods associated with it:
 
@@ -138,7 +142,9 @@ Example: print the definition of `S1` and methods associated with it:
 smartedit ast-print -S S1 src/file_ast.rs
 ```
 
-Type selectors also work for Python classes and TypeScript interfaces/classes.
+Type selectors also work for Python classes, JavaScript classes, TypeScript interfaces/classes,
+and Go types. Qualified paths can disambiguate duplicate names. Across multiple input files,
+files without a selector match are skipped; the command fails only if nothing matches.
 
 Selectors can be combined with the other formatting flags:
 
@@ -186,4 +192,10 @@ Inspect one JavaScript or TypeScript type with nested methods:
 ```bash
 smartedit ast-print -S Greeter --signatures --doc src/example.ts
 smartedit ast-print -S Greeter --signatures src/example.js
+```
+
+Inspect a Go type with fields and receiver methods:
+
+```bash
+smartedit ast-print -S Box --signatures --doc src/example.go
 ```

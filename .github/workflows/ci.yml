@@ -72,3 +72,49 @@ jobs:
 
       - name: Run tests
         run: cargo test --workspace --all-features --locked
+
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features --locked
+
+      - name: Smoke-test native user install and CRLF program input
+        shell: pwsh
+        run: |
+          cargo build --locked --bin smartedit
+          $binary = (Resolve-Path "target/debug/smartedit.exe").Path
+
+          $userHome = Join-Path $env:RUNNER_TEMP "smartedit-user-home"
+          Remove-Item Env:HOME -ErrorAction SilentlyContinue
+          $env:USERPROFILE = $userHome
+          & $binary install-skill --user
+          if ($LASTEXITCODE -ne 0) { throw "install-skill --user failed" }
+          $skill = Join-Path $userHome ".agents/skills/smartedit/SKILL.md"
+          if (-not (Test-Path $skill)) { throw "skill was not installed at $skill" }
+
+          $work = Join-Path $env:RUNNER_TEMP "smartedit-crlf"
+          New-Item -ItemType Directory -Force $work | Out-Null
+          [IO.File]::WriteAllText((Join-Path $work "target.txt"), "before`r`n")
+          [IO.File]::WriteAllText((Join-Path $work "edit.smedit"), "tr target.txt `"before`" `"after`"`r`n")
+          Push-Location $work
+          try {
+            & $binary apply --file edit.smedit
+            if ($LASTEXITCODE -ne 0) { throw "CRLF edit program failed" }
+          } finally {
+            Pop-Location
+          }
+          if ((Get-Content (Join-Path $work "target.txt") -Raw) -notmatch "after") {
+            throw "CRLF edit program did not update target.txt"
+          }

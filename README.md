@@ -17,7 +17,7 @@ For command syntax and detailed manual usage, see `docs/ast-print.md`, `docs/tex
 Use `smartedit` when an agent or operator should:
 
 - inspect file structure before reading full source
-- locate exact edit spans with `--loc`
+- locate whole-line edit ranges with `--loc`, including warnings when items share boundary lines
 - scan signatures or docs across many files
 - apply narrow edits instead of rewriting entire files
 - bias an agent toward token-efficient exploration and editing in a repo
@@ -85,7 +85,7 @@ This writes `SKILL.md` to `.agents/skills/smartedit` under the chosen root.
 
 The intended loop is:
 
-1. Use `smartedit ast-print` to get structure, signatures, docs, or exact locations.
+1. Use `smartedit ast-print` to get structure, signatures, docs, or line locations.
 2. Decide on a small target span instead of editing a whole file.
 3. Use `smartedit apply` with an inline edit program or `.smedit` file.
 
@@ -95,8 +95,6 @@ Typical agent scenarios:
 - An agent finds a function with `--loc`, then replaces only that function body.
 - An agent scans signatures across a glob to understand a subsystem without paying to read every file in full.
 - A repo installs the bundled skill so agents default to `smartedit` first and fall back only when needed.
-
-## Develop
 
 ### Release Automation
 

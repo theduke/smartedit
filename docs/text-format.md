@@ -18,6 +18,8 @@ Rules:
 - blank lines are ignored
 - `#` starts a comment and runs to the end of the line
 - comments may be full-line or inline
+- both LF and CRLF line endings are accepted
+- the final line does not need a trailing newline, including a comment-only final line
 
 Example:
 
@@ -48,6 +50,7 @@ Within one snapshot stage:
 - line ranges are read from the original contents of the source file in that snapshot
 - destination file contents are also taken from that snapshot
 - multiple text edits that affect the same file are merged into one final write
+- aliases for the same file, including symbolic and hard links, are merged safely
 - later operations in the same stage do not see earlier operations' results
 
 Example:
@@ -69,6 +72,9 @@ lm a.txt:1-2 out.txt:1
 Both inserts are planned against the same original contents of `out.txt`, then merged into one final write.
 
 When multiple inserts target the same destination offset in the same snapshot stage, they are applied in modification order.
+
+Overlapping deletions are coalesced. Conflicting destructive edits, file targets, and path aliases
+are rejected during planning rather than applied ambiguously.
 
 ### Incremental Mode
 
@@ -151,18 +157,20 @@ Examples:
 m a.txt out/
 m a/b/ c/
 m src/*.rs rust/
+m "source files/*.txt" "staging #1/"
 m r"src/[a-z_]+\.rs" filtered/
 ```
 
 Semantics:
 
 - the source spec is resolved during planning
-- each matched file is copied into the destination directory
-- the source file is then deleted
+- existing destinations are not overwritten
+- regular-file moves preserve platform-supported permissions
+- symbolic links are moved as links, including dangling links and links to directories
+- child directory links found by a scan are not traversed
 - relative paths below the match root are preserved
 - destination parent directories are created as needed
 - planning fails if no files match
-- planning fails if a destination file already exists
 
 Example:
 
@@ -201,6 +209,7 @@ Examples:
 r old.txt
 r generated/
 r build/*.tmp
+r "generated files/#old/"
 r r"cache/.+\.bin"
 ```
 
@@ -364,7 +373,7 @@ ldm Cargo.toml r"^#"
 Semantics:
 
 - the regex is evaluated independently for each line
-- matching is performed on line text without the trailing newline
+- matching is performed on line text without its logical trailing newline (`\n` or `\r\n`)
 - matching lines are deleted as whole lines, including their trailing newline when present
 
 ### `textreplace`
@@ -414,6 +423,16 @@ Supported forms:
 - glob
 - regex
 
+### Path Operands
+
+Paths may be unquoted tokens or double-quoted strings. Quote paths containing whitespace, `#`, or
+`;`. Quoted paths use the normal string escapes, so Windows backslashes must be doubled.
+
+```text
+"source files/input #1.txt"
+"C:\\Program Files\\project\\input.txt"
+```
+
 ### Exact File
 
 Examples:
@@ -421,19 +440,27 @@ Examples:
 ```text
 a.txt
 path/to/file.rs
+"path with spaces/file #1.rs"
 ```
 
 Matches exactly one file path.
 
+For file-oriented move and remove operations, an exact final symbolic link is a file entry: dangling
+links and links to directories can be moved or removed without affecting their targets.
+
 ### Directory-All
 
-A path ending in `/` means “all files under this directory”, recursively.
+A path ending in `/` or `\` means “all files under this directory”, recursively.
+
+An explicitly named symbolic link to a directory is followed as the scan root. Symbolic links found
+below that root are matched as entries and are not traversed recursively.
 
 Examples:
 
 ```text
 src/
 a/b/
+C:\work\src\
 ```
 
 ### Glob
@@ -445,12 +472,14 @@ Examples:
 ```text
 src/*.rs
 assets/**/*.png
+"generated files/**/*.txt"
 ```
 
 Glob matching is evaluated relative to the non-glob prefix:
 
 - `src/*.rs` becomes root `src`, pattern `*.rs`
 - `assets/**/*.png` becomes root `assets`, pattern `**/*.png`
+- `C:\work\src\*.rs` becomes root `C:\work\src`, pattern `*.rs`
 
 ### Regex
 
@@ -460,9 +489,22 @@ Regex specs use Rust-style raw string syntax:
 r"src/[a-z_]+\.rs"
 ```
 
-The planner infers a root directory from the literal prefix before the pattern becomes dynamic, then matches the regex against normalized relative paths beneath that root.
+Regexes match normalized `/`-separated paths beneath their inferred search root.
 
-Regex matching uses `/` as the normalized separator.
+## Inline Command-Line Programs
+
+For inline programs, semicolons outside strings, regexes, and comments separate statements:
+
+```console
+smartedit apply 'li a.txt:0 "key;value\n"; ldm b.txt r"^x;y$"'
+smartedit apply 'ld "notes; archived/#1.txt":0-1'
+```
+
+Choose exactly one input source: positional inline operations, `--file PATH` (use `-` for stdin),
+or piped stdin. Empty programs and programs without modifications are rejected.
+
+`--root DIR` changes the working directory used to resolve relative paths. It is not a containment
+boundary: absolute paths, `..`, and symbolic links may still address paths outside that directory.
 
 ## Line Range Syntax
 
@@ -478,6 +520,7 @@ Rules:
 - `start-end` means `[start, end)`
 - offsets are `usize` line indices
 - ranges should be sorted and non-overlapping
+- Windows drive colons are part of the path; the final colon separates the line range
 
 ## String Literals
 
@@ -519,13 +562,9 @@ There is currently no plain-token escape syntax for `#`, so it should not appear
 
 Parsing produces a span-aware AST.
 
-Planning:
-
-- resolves path specs into concrete files
-- validates that operations are possible
-- produces a batch of concrete filesystem actions
-
-Execution applies that planned batch.
+Planning resolves paths, validates conflicts, and produces concrete filesystem actions. Execution
+applies those actions in order and is best-effort, not transactional: an error does not roll back
+earlier successful actions. Snapshot and incremental describe evaluation visibility, not rollback.
 
 This separation makes dry runs possible and allows validation before writing files.
 
@@ -548,6 +587,14 @@ lineinsert-op   := ("lineinsert" | "li") <file ":" offset> <string>
 linereplace-op  := ("linereplace" | "lr") <file ":" ranges> <string>
 linedeletematch-op := ("linedeletematch" | "ldm") <file> <regex>
 textreplace-op  := ("textreplace" | "tr") <source-spec> <match-pattern> <string>
+
+source-spec     := path-operand | regex
+destination-dir := path-operand
+source-file     := path-operand
+destination-file := path-operand
+file            := path-operand
+path-operand    := unquoted-path | quoted-path
+quoted-path     := string
 
 ranges          := range ("," range)*
 range           := <usize> "-" <usize>

@@ -20,12 +20,16 @@ description: Prefer `smartedit ast-print` for Rust, Python, JavaScript, TypeScri
 - Supported languages: Rust, Python, JavaScript (including JSX), TypeScript (including TSX), and Go.
 - Use for: outlines, signatures, doc comments/docstrings, type bodies, function bodies, locations, nested item selection, type inspection, multi-file/glob scans.
 - Default to `--loc` when the result may drive an edit.
-- `--loc` is the most important exploration flag for editing: it prints line locations so you can target narrow `smartedit apply` operations instead of rewriting files.
-- Treat `--loc` output as the fast path from exploration to editing. Check the span, then use `ld`, `lr`, or `lm` against that area.
-- `--doc` prints Rust doc comments, Python docstrings, and leading JavaScript/TypeScript comments. For Rust, it also prints root module `//!` docs. For Python, it prints module/class/function docstrings. For JavaScript/TypeScript, it prints leading file/item comments.
+- `--loc` is the most important exploration flag for editing: it prints zero-based, half-open line ranges that use the same coordinates as `smartedit apply`.
+- Treat `--loc` output as the fast path from exploration to editing. A plain `[start-end]` span can be copied directly into `ld`, `lr`, or `lm` as `start-end`.
+- Never apply a `[start-end shared-line]` span directly: another item or source fragment occupies a boundary line, and line-level edits cannot isolate it. Split/reformat onto separate lines or inspect and construct a safe line edit; `smartedit apply` has no byte-range mode.
+- `--doc` prints documentation and owned leading comments for the supported languages.
 - Flags: `-l/--loc`, `--signatures`, `--doc`, `--type-bodies`, `--function-bodies`, `-s/--select <item-glob>`, `-S/--type-select <type-glob>`, `--no-ignore`
-- Prefer `-s` when you know an item path or subtree. Prefer `-S` when you want a type plus associated `impl` items in Rust, a class plus nested methods in Python/JavaScript, or a class/interface plus nested members in TypeScript.
+- Prefer `-s` when you know an item path or subtree. Prefer `-S` when you want a type plus associated `impl` items in Rust, a class plus nested methods in Python/JavaScript, a class/interface plus nested members in TypeScript, or a Go type plus its members and receiver methods.
 - Selector paths are AST item paths, not filenames. For a top-level `fn f1()` in `fun.rs`, prefer `-s f1`, not `-s fun.f1`.
+- Selectors over multiple files are aggregate queries: files without a match are skipped, and the command fails only if no input file matches.
+- `ast-print` renders recoverable structure from incomplete files. When syntax errors are present, requested locations are omitted because they may not be safe edit targets.
+- Go methods use receiver-qualified paths such as `Box.Get`; grouped declarations remain independently selectable where their source spans permit it.
 
 ```bash
 # quick outline
@@ -54,6 +58,9 @@ smartedit ast-print src/example.ts
 
 # TypeScript interface/class plus nested members
 smartedit ast-print -S Greeter --signatures --doc src/example.ts
+
+# Go type, fields, interface members, and receiver methods
+smartedit ast-print -S Box --signatures --doc src/example.go
 
 # signatures plus doc comments for one item subtree
 smartedit ast-print -s 'outer.inner.*' --doc --signatures src/file_ast.rs
