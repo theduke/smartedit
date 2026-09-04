@@ -13,6 +13,10 @@ pub enum AstLanguage {
     TypeScript,
     Tsx,
     Go,
+    Scala,
+    Java,
+    Kotlin,
+    Lua,
 }
 
 impl AstLanguage {
@@ -24,6 +28,10 @@ impl AstLanguage {
             Some("ts") | Some("mts") | Some("cts") => Some(Self::TypeScript),
             Some("tsx") => Some(Self::Tsx),
             Some("go") => Some(Self::Go),
+            Some("scala" | "sc") => Some(Self::Scala),
+            Some("java") => Some(Self::Java),
+            Some("kt" | "kts") => Some(Self::Kotlin),
+            Some("lua") => Some(Self::Lua),
             _ => None,
         }
     }
@@ -76,6 +84,10 @@ impl FileAst {
                 parse_js_like_ast(language, source)
             }
             AstLanguage::Go => parse_go_ast(source),
+            AstLanguage::Scala => parse_scala_ast(source),
+            AstLanguage::Java => parse_java_ast(source),
+            AstLanguage::Kotlin => parse_kotlin_ast(source),
+            AstLanguage::Lua => parse_lua_ast(source),
         }
     }
 
@@ -469,7 +481,13 @@ fn parse_js_like_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
             "tsx",
             JsLikeFlavor::TypeScript,
         ),
-        AstLanguage::Rust | AstLanguage::Python | AstLanguage::Go => unreachable!(),
+        AstLanguage::Rust
+        | AstLanguage::Python
+        | AstLanguage::Go
+        | AstLanguage::Scala
+        | AstLanguage::Java
+        | AstLanguage::Kotlin
+        | AstLanguage::Lua => unreachable!(),
     };
     parser
         .set_language(&tree_sitter_language)
@@ -5852,4 +5870,261 @@ export default <T,>(props: { value: T }) => <main>{props.value}</main>;
             "export default <T,>(props: { value: T }) =>"
         );
     }
+}
+
+fn collect_generic_items<'a>(
+    node: Node<'a>,
+    source: &str,
+    parse_item: fn(Node<'a>, &str) -> Option<AstItem>,
+) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    let mut items = Vec::new();
+    for child in node.named_children(&mut cursor) {
+        if let Some(item) = parse_item(child, source) {
+            items.push(item);
+        } else {
+            items.extend(collect_generic_items(child, source, parse_item));
+        }
+    }
+    items
+}
+
+fn parse_scala_ast(source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_scala::LANGUAGE.into();
+    parser
+        .set_language(&language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: "scala",
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: "scala",
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let mut items = collect_generic_items(root, source, parse_scala_item);
+    mark_overlapping_sibling_locations(&mut items);
+
+    Ok(FileAst {
+        language: AstLanguage::Scala,
+        root_docs: None,
+        items,
+        has_errors: root.has_error(),
+        first_error: first_syntax_error(root),
+    })
+}
+
+fn parse_scala_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class_definition" => (AstItemKind::Class, "class"),
+        "object_definition" => (AstItemKind::Class, "object"),
+        "trait_definition" => (AstItemKind::Trait, "trait"),
+        "function_definition" => (AstItemKind::Function, "def"),
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_scala_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_java_ast(source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+    parser
+        .set_language(&language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: "java",
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: "java",
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let mut items = collect_generic_items(root, source, parse_java_item);
+    mark_overlapping_sibling_locations(&mut items);
+
+    Ok(FileAst {
+        language: AstLanguage::Java,
+        root_docs: None,
+        items,
+        has_errors: root.has_error(),
+        first_error: first_syntax_error(root),
+    })
+}
+
+fn parse_java_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class_declaration" | "record_declaration" => (AstItemKind::Class, "class"),
+        "interface_declaration" | "annotation_type_declaration" => {
+            (AstItemKind::Interface, "interface")
+        }
+        "enum_declaration" => (AstItemKind::Enum, "enum"),
+        "method_declaration" | "constructor_declaration" => (AstItemKind::Function, "method"),
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_java_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_kotlin_ast(source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
+    parser
+        .set_language(&language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: "kotlin",
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: "kotlin",
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let mut items = collect_generic_items(root, source, parse_kotlin_item);
+    mark_overlapping_sibling_locations(&mut items);
+
+    Ok(FileAst {
+        language: AstLanguage::Kotlin,
+        root_docs: None,
+        items,
+        has_errors: root.has_error(),
+        first_error: first_syntax_error(root),
+    })
+}
+
+fn parse_kotlin_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class_declaration" => (AstItemKind::Class, "class"),
+        "object_declaration" => (AstItemKind::Class, "object"),
+        "function_declaration" => (AstItemKind::Function, "fun"),
+        _ => return None,
+    };
+
+    let name = child_text_by_field(node, "identifier", source)
+        .or_else(|| {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .find(|c| c.kind() == "type_identifier" || c.kind() == "simple_identifier")
+                .map(|c| trimmed_node_text(c, source))
+        })
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_kotlin_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_lua_ast(source: &str) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let language: tree_sitter::Language = tree_sitter_lua::LANGUAGE.into();
+    parser
+        .set_language(&language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: "lua",
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: "lua",
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let mut items = collect_generic_items(root, source, parse_lua_item);
+    mark_overlapping_sibling_locations(&mut items);
+
+    Ok(FileAst {
+        language: AstLanguage::Lua,
+        root_docs: None,
+        items,
+        has_errors: root.has_error(),
+        first_error: first_syntax_error(root),
+    })
+}
+
+fn parse_lua_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "function_declaration" | "local_function_declaration" => {
+            (AstItemKind::Function, "function")
+        }
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(trimmed_node_text(node, source)),
+        body: None,
+        children: Vec::new(),
+    })
 }
