@@ -24,18 +24,22 @@ Use `smartedit` when an agent or operator should:
 
 ## Install The CLI
 
+### Release binaries
+
+You can download a release binary from the latest Github release at: https://github.com/theduke/smartedit/releases
+
 ### Cargo
-
-Install from a checkout:
-
-```bash
-cargo install --path .
-```
 
 Install directly from Git:
 
 ```bash
 cargo install --git https://github.com/theduke/smartedit --locked smartedit-cli
+```
+
+Install from a checkout:
+
+```bash
+cargo install --path .
 ```
 
 ### Nix Flake
@@ -56,6 +60,13 @@ nix run github:theduke/smartedit
 
 The repo ships a bundled `smartedit` skill for agent environments that support `.agents/skills`.
 
+
+Install it for your user home:
+
+```bash
+smartedit install-skill --user
+```
+
 Install it for the current repository:
 
 ```bash
@@ -66,12 +77,6 @@ Install it into a specific directory:
 
 ```bash
 smartedit install-skill --dir path/to/project
-```
-
-Install it for your user home:
-
-```bash
-smartedit install-skill --user
 ```
 
 This writes `SKILL.md` to `.agents/skills/smartedit` under the chosen root.
