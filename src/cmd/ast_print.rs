@@ -21,7 +21,7 @@ pub struct CmdAstPrint {
     #[arg(short = 'S', long = "type-select", value_name = "TYPE_GLOB")]
     pub type_selectors: Vec<String>,
 
-    /// Render declaration signatures; Rust outer attributes are included.
+    /// Render declaration signatures; type bodies are omitted.
     #[arg(long)]
     pub signatures: bool,
 
@@ -453,6 +453,11 @@ mod tests {
             "export function run(): void {}\n",
         )
         .unwrap();
+        fs::write(
+            dir.path().join("src/tool.go"),
+            "package tool\n\nfunc Run() {}\n",
+        )
+        .unwrap();
 
         let resolved = resolve_ast_inputs(&["src/**/*".to_owned()], dir.path(), false).unwrap();
 
@@ -461,6 +466,7 @@ mod tests {
             vec![
                 dir.path().join("src/api.pyi"),
                 dir.path().join("src/keep.rs"),
+                dir.path().join("src/tool.go"),
                 dir.path().join("src/tool.js"),
                 dir.path().join("src/tool.py"),
                 dir.path().join("src/tool.ts")
@@ -634,6 +640,7 @@ mod tests {
             ("broken.js", "function broken( {\n"),
             ("broken.ts", "interface Broken<T {\n"),
             ("broken.tsx", "const broken = <div>;\n"),
+            ("broken.go", "package broken\n\nfunc Broken( {\n"),
         ];
 
         for (name, source) in fixtures {
@@ -653,6 +660,32 @@ mod tests {
             assert!(
                 error.contains("at zero-based "),
                 "missing syntax-error location for {name}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_or_statement_shaped_go_inputs_fail_closed() {
+        let dir = TestDir::new("go-source-shape");
+        for (name, source) in [
+            ("missing-package.go", "func MissingPackage() {}\n"),
+            ("duplicate-package.go", "package first\npackage second\n"),
+            ("misordered-package.go", "var Before int\npackage sample\n"),
+            ("short-var.go", "package sample\nvalue := 1\n"),
+            ("return.go", "package sample\nreturn\n"),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, source).unwrap();
+            let error = render_ast_files(
+                std::slice::from_ref(&path),
+                dir.path(),
+                &AstSelector::default(),
+                AstRenderOptions::default(),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("source contains syntax errors at zero-based"),
+                "unexpected error for {name}: {error}"
             );
         }
     }

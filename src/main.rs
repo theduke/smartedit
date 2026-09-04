@@ -10,7 +10,7 @@ use crate::cmd::{apply::CmdApply, ast_print::CmdAstPrint, install_skill::CmdInst
 #[command(version)]
 #[command(about = "Inspect source structure and apply compact, deterministic edits")]
 #[command(
-    long_about = "Inspect Rust, Python, JavaScript, and TypeScript structure; apply compact text and file edit programs; or install the bundled agent skill.\n\nRun `smartedit <COMMAND> --help` for command-specific options and examples.",
+    long_about = "Inspect Rust, Python, JavaScript, TypeScript, and Go structure; apply compact text and file edit programs; or install the bundled agent skill.\n\nRun `smartedit <COMMAND> --help` for command-specific options and examples.",
     after_help = "Examples:\n  smartedit ast-print --loc src/main.rs\n  smartedit apply 'li notes.txt:0 \"heading\\n\"'\n  smartedit install-skill --repo"
 )]
 struct Cli {
@@ -28,7 +28,7 @@ enum Command {
 
     /// Print a structural outline of supported source files.
     #[command(
-        long_about = "Print a structural outline of Rust, Python, JavaScript, or TypeScript files. Inputs may be paths or globs; selectors narrow output to matching items."
+        long_about = "Print a structural outline of Rust, Python, JavaScript, TypeScript, or Go files. Inputs may be paths or globs; selectors narrow output to matching items."
     )]
     AstPrint(CmdAstPrint),
 
@@ -71,7 +71,7 @@ mod tests {
     fn top_level_help_describes_each_command() {
         let help = Cli::command().render_long_help().to_string();
 
-        assert!(help.contains("Inspect Rust, Python, JavaScript, and TypeScript structure"));
+        assert!(help.contains("Inspect Rust, Python, JavaScript, TypeScript, and Go structure"));
         assert!(help.contains("Apply a compact edit program to files"));
         assert!(help.contains("Print a structural outline"));
         assert!(help.contains("Install the bundled smartedit agent skill"));
@@ -103,5 +103,6 @@ mod tests {
 
         assert!(help.contains("zero-based, half-open line ranges"));
         assert!(help.contains("shared lines are marked unsafe"));
+        assert!(help.contains("Rust, Python, JavaScript, TypeScript, or Go files"));
     }
 }

@@ -271,7 +271,12 @@ impl AstSelector {
             item_patterns: self
                 .item_patterns
                 .iter()
-                .map(|pattern| compile_selector_pattern(pattern))
+                .map(|pattern| {
+                    Ok(CompiledItemSelectorPattern {
+                        matcher: compile_selector_pattern(pattern)?,
+                        is_qualified: pattern.contains('.'),
+                    })
+                })
                 .collect::<Result<Vec<_>>>()?,
             type_patterns: self
                 .type_patterns
@@ -369,17 +374,81 @@ fn parse_go_ast(source: &str) -> Result<FileAst> {
             message: "tree-sitter returned no parse tree".to_owned(),
         })?;
     let root = tree.root_node();
-    let docs = JsDocContext::new(source, root);
+    let docs = GoDocContext::new(source, root);
     let mut items = collect_go_supported_items(root, &docs);
     mark_overlapping_sibling_locations(&mut items);
+    let syntax_error = first_syntax_error(root);
+    let shape_error = first_go_source_shape_error(root, source);
 
     Ok(FileAst {
         language: AstLanguage::Go,
         root_docs: docs.root_module_docs(),
         items,
-        has_errors: root.has_error(),
-        first_error: first_syntax_error(root),
+        has_errors: root.has_error() || shape_error.is_some(),
+        first_error: earliest_syntax_error(syntax_error, shape_error),
     })
+}
+
+fn first_go_source_shape_error(root: Node<'_>, source: &str) -> Option<AstSyntaxErrorLocation> {
+    let mut cursor = root.walk();
+    let syntax = root
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() != "comment")
+        .collect::<Vec<_>>();
+    let Some(first) = syntax.first().copied() else {
+        let point = point_for_byte(source, source.len());
+        return Some(AstSyntaxErrorLocation {
+            line: point.row,
+            column: point.column,
+            is_missing: true,
+        });
+    };
+    if first.kind() != "package_clause" {
+        return Some(go_shape_error_at(first, true));
+    }
+
+    for child in syntax.into_iter().skip(1) {
+        if child.kind() == "package_clause"
+            || !matches!(
+                child.kind(),
+                "import_declaration"
+                    | "const_declaration"
+                    | "var_declaration"
+                    | "type_declaration"
+                    | "function_declaration"
+                    | "method_declaration"
+            )
+        {
+            return Some(go_shape_error_at(child, false));
+        }
+    }
+    None
+}
+
+fn go_shape_error_at(node: Node<'_>, is_missing: bool) -> AstSyntaxErrorLocation {
+    let point = node.start_position();
+    AstSyntaxErrorLocation {
+        line: point.row,
+        column: point.column,
+        is_missing,
+    }
+}
+
+fn earliest_syntax_error(
+    first: Option<AstSyntaxErrorLocation>,
+    second: Option<AstSyntaxErrorLocation>,
+) -> Option<AstSyntaxErrorLocation> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(
+            if (first.line, first.column) <= (second.line, second.column) {
+                first
+            } else {
+                second
+            },
+        ),
+        (Some(error), None) | (None, Some(error)) => Some(error),
+        (None, None) => None,
+    }
 }
 
 fn parse_js_like_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
@@ -483,9 +552,18 @@ fn collect_python_supported_items(node: Node<'_>, docs: &PythonDocContext<'_>) -
     items
 }
 
-fn collect_go_supported_items(node: Node<'_>, docs: &JsDocContext<'_>) -> Vec<AstItem> {
+fn collect_go_supported_items(node: Node<'_>, docs: &GoDocContext<'_>) -> Vec<AstItem> {
+    let container = if node.kind() == "block" {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find(|child| child.kind() == "statement_list")
+            .unwrap_or(node)
+    } else {
+        node
+    };
     let mut cursor = node.walk();
-    node.named_children(&mut cursor)
+    container
+        .named_children(&mut cursor)
         .flat_map(|child| parse_go_items(child, docs))
         .collect()
 }
@@ -681,26 +759,22 @@ fn python_type_alias_name(node: Node<'_>) -> Option<Node<'_>> {
         .find_map(python_type_alias_name)
 }
 
-fn parse_go_items(node: Node<'_>, docs: &JsDocContext<'_>) -> Vec<AstItem> {
+fn parse_go_items(node: Node<'_>, docs: &GoDocContext<'_>) -> Vec<AstItem> {
     match node.kind() {
         "function_declaration" => vec![parse_go_function_item(node, docs, false)],
         "method_declaration" => vec![parse_go_function_item(node, docs, true)],
         "type_declaration" => parse_go_type_declaration_items(node, docs),
         "const_declaration" => {
-            parse_go_value_declaration_item(AstItemKind::Const, "const", node, docs)
-                .into_iter()
-                .collect()
+            parse_go_value_declaration_items(AstItemKind::Const, "const", node, docs)
         }
         "var_declaration" => {
-            parse_go_value_declaration_item(AstItemKind::Static, "var", node, docs)
-                .into_iter()
-                .collect()
+            parse_go_value_declaration_items(AstItemKind::Static, "var", node, docs)
         }
         _ => Vec::new(),
     }
 }
 
-fn parse_go_function_item(node: Node<'_>, docs: &JsDocContext<'_>, is_method: bool) -> AstItem {
+fn parse_go_function_item(node: Node<'_>, docs: &GoDocContext<'_>, is_method: bool) -> AstItem {
     let source = docs.source;
     let name =
         child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
@@ -715,15 +789,18 @@ fn parse_go_function_item(node: Node<'_>, docs: &JsDocContext<'_>, is_method: bo
     } else {
         format!("func {name}")
     };
+    let preamble = docs.leading_item_preamble(node);
     AstItem {
         kind: AstItemKind::Function,
         name: Some(name),
         associated_type: receiver,
-        location: location_for_node(node, source),
-        docs: docs.leading_item_docs(node),
+        location: location_for_go_node(node, preamble.as_ref(), source),
+        docs: preamble.as_ref().map(|preamble| preamble.text.clone()),
         inner_docs: None,
-        attributes: None,
-        source_preamble: None,
+        attributes: preamble
+            .as_ref()
+            .and_then(|preamble| preamble.directives.clone()),
+        source_preamble: preamble.as_ref().map(|preamble| preamble.text.clone()),
         summary,
         signature: Some(signature_text(node, source)),
         body: Some(trimmed_node_text(node, source)),
@@ -734,18 +811,31 @@ fn parse_go_function_item(node: Node<'_>, docs: &JsDocContext<'_>, is_method: bo
     }
 }
 
-fn parse_go_type_declaration_items(node: Node<'_>, docs: &JsDocContext<'_>) -> Vec<AstItem> {
+fn parse_go_type_declaration_items(node: Node<'_>, docs: &GoDocContext<'_>) -> Vec<AstItem> {
+    let grouped = go_declaration_is_grouped(node);
+    let group_preamble = grouped.then(|| docs.leading_item_preamble(node)).flatten();
     let mut cursor = node.walk();
     node.named_children(&mut cursor)
-        .filter(|child| child.kind() == "type_spec")
-        .map(|spec| parse_go_type_spec_item(node, spec, docs))
+        .filter(|child| matches!(child.kind(), "type_spec" | "type_alias"))
+        .enumerate()
+        .map(|(index, spec)| {
+            parse_go_type_spec_item(
+                node,
+                spec,
+                grouped,
+                (index == 0).then_some(group_preamble.as_ref()).flatten(),
+                docs,
+            )
+        })
         .collect()
 }
 
 fn parse_go_type_spec_item(
     render_node: Node<'_>,
     spec: Node<'_>,
-    docs: &JsDocContext<'_>,
+    grouped: bool,
+    group_preamble: Option<&GoItemPreamble>,
+    docs: &GoDocContext<'_>,
 ) -> AstItem {
     let source = docs.source;
     let name =
@@ -761,44 +851,81 @@ fn parse_go_type_spec_item(
         AstItemKind::Interface => "interface",
         _ => "type",
     };
+    let owned_node = if grouped { spec } else { render_node };
+    let owned_preamble = docs.leading_item_preamble(owned_node);
+    let preamble = merge_go_preambles(group_preamble, owned_preamble.as_ref());
+    let declaration = go_prefixed_spec("type", owned_node, spec, source);
+    let signature = type_node
+        .filter(|node| matches!(node.kind(), "struct_type" | "interface_type"))
+        .map(|type_node| {
+            let prefix = source_fragment(source, spec.start_byte(), type_node.start_byte());
+            format!(
+                "type {prefix} {}",
+                type_node.kind().trim_end_matches("_type")
+            )
+        })
+        .unwrap_or_else(|| declaration.clone());
     AstItem {
         kind,
         name: Some(name.clone()),
         associated_type: None,
-        location: location_for_node(render_node, source),
-        docs: docs.leading_item_docs(render_node),
+        location: location_for_go_node(owned_node, owned_preamble.as_ref(), source),
+        docs: preamble.as_ref().map(|preamble| preamble.text.clone()),
         inner_docs: None,
-        attributes: None,
-        source_preamble: None,
+        attributes: preamble
+            .as_ref()
+            .and_then(|preamble| preamble.directives.clone()),
+        source_preamble: preamble.as_ref().map(|preamble| preamble.text.clone()),
         summary: format!("{keyword} {name}"),
-        signature: Some(trimmed_node_text(render_node, source)),
-        body: Some(trimmed_node_text(render_node, source)),
-        children: Vec::new(),
+        signature: Some(signature),
+        body: Some(declaration),
+        children: type_node
+            .map(|type_node| parse_go_type_members(type_node, docs))
+            .unwrap_or_default(),
     }
 }
 
-fn parse_go_value_declaration_item(
+fn parse_go_value_declaration_items(
     kind: AstItemKind,
     keyword: &str,
     node: Node<'_>,
-    docs: &JsDocContext<'_>,
-) -> Option<AstItem> {
+    docs: &GoDocContext<'_>,
+) -> Vec<AstItem> {
     let source = docs.source;
-    let name = first_go_spec_name(node, source)?;
-    Some(AstItem {
-        kind,
-        name: Some(name.clone()),
-        associated_type: None,
-        location: location_for_node(node, source),
-        docs: docs.leading_item_docs(node),
-        inner_docs: None,
-        attributes: None,
-        source_preamble: None,
-        summary: format!("{keyword} {name}"),
-        signature: Some(trimmed_node_text(node, source)),
-        body: Some(trimmed_node_text(node, source)),
-        children: Vec::new(),
-    })
+    let grouped = go_declaration_is_grouped(node);
+    let group_preamble = grouped.then(|| docs.leading_item_preamble(node)).flatten();
+    let mut items = Vec::new();
+    for (spec_index, spec) in go_declaration_specs(node, matches!(kind, AstItemKind::Const))
+        .into_iter()
+        .enumerate()
+    {
+        let owned_node = if grouped { spec } else { node };
+        let owned_preamble = docs.leading_item_preamble(owned_node);
+        let declaration = go_prefixed_spec(keyword, owned_node, spec, source);
+        for (name_index, name) in go_spec_names(spec, source).into_iter().enumerate() {
+            let context = (spec_index == 0 && name_index == 0)
+                .then_some(group_preamble.as_ref())
+                .flatten();
+            let preamble = merge_go_preambles(context, owned_preamble.as_ref());
+            items.push(AstItem {
+                kind,
+                name: Some(name.clone()),
+                associated_type: None,
+                location: location_for_go_node(owned_node, owned_preamble.as_ref(), source),
+                docs: preamble.as_ref().map(|preamble| preamble.text.clone()),
+                inner_docs: None,
+                attributes: preamble
+                    .as_ref()
+                    .and_then(|preamble| preamble.directives.clone()),
+                source_preamble: preamble.as_ref().map(|preamble| preamble.text.clone()),
+                summary: format!("{keyword} {name}"),
+                signature: Some(declaration.clone()),
+                body: Some(declaration.clone()),
+                children: Vec::new(),
+            });
+        }
+    }
+    items
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -994,15 +1121,18 @@ fn parse_js_export_items(
     docs: &JsDocContext<'_>,
     flavor: JsLikeFlavor,
 ) -> Vec<AstItem> {
-    let source_text = trimmed_node_text(node, docs.source);
-    if flavor == JsLikeFlavor::TypeScript && source_text.starts_with("export as namespace ") {
+    let is_typescript = flavor == JsLikeFlavor::TypeScript;
+    if is_typescript
+        && direct_child_with_kind(node, "as").is_some()
+        && direct_child_with_kind(node, "namespace").is_some()
+    {
         return vec![parse_ts_export_binding_item(
             node,
             docs,
             "export-as-namespace",
         )];
     }
-    if flavor == JsLikeFlavor::TypeScript && source_text.starts_with("export =") {
+    if is_typescript && direct_child_with_kind(node, "=").is_some() {
         return vec![parse_ts_export_binding_item(node, docs, "export=")];
     }
 
@@ -1037,9 +1167,7 @@ fn parse_js_export_items(
                 flavor,
                 "default".to_owned(),
             )],
-            _ if flavor == JsLikeFlavor::TypeScript
-                && source_text.starts_with("export default ") =>
-            {
+            _ if is_typescript && direct_child_with_kind(node, "default").is_some() => {
                 vec![parse_ts_export_binding_item(node, docs, "default")]
             }
             _ => parse_js_assignment_like_item(node, value, docs, flavor)
@@ -1048,7 +1176,7 @@ fn parse_js_export_items(
         };
     }
 
-    if flavor == JsLikeFlavor::TypeScript && source_text.starts_with("export default ") {
+    if is_typescript && direct_child_with_kind(node, "default").is_some() {
         return vec![parse_ts_export_binding_item(node, docs, "default")];
     }
 
@@ -1174,11 +1302,15 @@ fn parse_js_variable_declaration_items(
         .named_children(&mut cursor)
         .filter(|child| child.kind() == "variable_declarator")
         .collect();
+    let owns_whole_declaration = declarators.len() == 1;
     let mut items = Vec::new();
     for declarator in declarators {
         if let Some(mut item) =
             parse_js_variable_declarator_item(render_node, declarator, docs, flavor)
         {
+            if !owns_whole_declaration {
+                item.location.is_edit_ready = false;
+            }
             if !items.is_empty() {
                 item.docs = None;
             }
@@ -1872,8 +2004,8 @@ fn parse_macro_item(node: Node<'_>, docs: &RustDocContext<'_>) -> AstItem {
         inner_docs: None,
         attributes: preamble.attributes.clone(),
         source_preamble: preamble.source_text.clone(),
-        summary: format!("macro {name}"),
-        signature: Some(format!("macro {name}")),
+        summary: format!("macro_rules! {name}"),
+        signature: Some(format!("macro_rules! {name}")),
         body: Some(trimmed_node_text(node, source)),
         children: Vec::new(),
     }
@@ -1972,6 +2104,8 @@ impl<'a> RustDocContext<'a> {
 
     fn item_preamble(&self, node: Node<'_>) -> RustItemPreamble {
         let mut current = node.prev_named_sibling();
+        let mut anchor = node.start_byte();
+        let mut crossed_blank_line = false;
         let mut start = None;
         let mut start_byte = None;
         let mut docs = Vec::new();
@@ -1980,6 +2114,7 @@ impl<'a> RustDocContext<'a> {
 
         while let Some(sibling) = current {
             let text = trimmed_node_text(sibling, self.source);
+            crossed_blank_line |= rust_gap_has_blank_line(&self.source[sibling.end_byte()..anchor]);
             if sibling.kind() == "attribute_item" && is_rust_doc_attribute(&text, false) {
                 docs.push(text.clone());
             } else if sibling.kind() == "attribute_item" {
@@ -1989,7 +2124,7 @@ impl<'a> RustDocContext<'a> {
             } else if is_rust_inner_doc_comment(&text) {
                 break;
             } else if is_rust_comment_node(sibling) {
-                if rust_comment_trails_prior_code(sibling) {
+                if crossed_blank_line || rust_comment_trails_prior_code(sibling) {
                     break;
                 }
                 attributes.push(text.clone());
@@ -1999,6 +2134,7 @@ impl<'a> RustDocContext<'a> {
             source_fragments.push(text);
             start = Some(sibling.start_position());
             start_byte = Some(sibling.start_byte());
+            anchor = sibling.start_byte();
             current = sibling.prev_named_sibling();
         }
 
@@ -2045,6 +2181,97 @@ struct JsDocContext<'a> {
     root_comments: Vec<JsCommentRange>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GoItemPreamble {
+    start: usize,
+    text: String,
+    directives: Option<String>,
+}
+
+struct GoDocContext<'a> {
+    source: &'a str,
+    comments: Vec<JsCommentRange>,
+    root_comments: Vec<JsCommentRange>,
+}
+
+impl<'a> GoDocContext<'a> {
+    fn new(source: &'a str, root: Node<'_>) -> Self {
+        let mut comments = Vec::new();
+        collect_js_comment_ranges(root, &mut comments);
+        let package_start = {
+            let mut cursor = root.walk();
+            root.named_children(&mut cursor)
+                .find(|child| child.kind() == "package_clause")
+                .map(|package| package.start_byte())
+        };
+        let root_comments = package_start.map_or_else(Vec::new, |package_start| {
+            comments
+                .iter()
+                .copied()
+                .filter(|comment| comment.end <= package_start)
+                .collect()
+        });
+        Self {
+            source,
+            comments,
+            root_comments,
+        }
+    }
+
+    fn root_module_docs(&self) -> Option<String> {
+        let first = self.root_comments.first()?;
+        let last = self.root_comments.last()?;
+        Some(trimmed_text(self.source, first.start, last.end))
+    }
+
+    fn leading_item_preamble(&self, node: Node<'_>) -> Option<GoItemPreamble> {
+        let owned = leading_comment_ranges(self.source, &self.comments, node);
+        let first = owned.first()?;
+        let last = owned.last()?;
+        let text = trimmed_text(self.source, first.start, last.end);
+        let directives = text
+            .lines()
+            .filter(|line| {
+                let line = line.trim_start();
+                line.starts_with("//go:") || line.starts_with("//line ")
+            })
+            .collect::<Vec<_>>();
+        let directives = (!directives.is_empty()).then(|| directives.join("\n"));
+        Some(GoItemPreamble {
+            start: first.start,
+            text,
+            directives,
+        })
+    }
+}
+
+fn merge_go_preambles(
+    context: Option<&GoItemPreamble>,
+    owned: Option<&GoItemPreamble>,
+) -> Option<GoItemPreamble> {
+    match (context, owned) {
+        (Some(context), Some(owned)) => {
+            let directives = [context.directives.as_deref(), owned.directives.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(GoItemPreamble {
+                start: owned.start,
+                text: format!("{}\n{}", context.text, owned.text),
+                directives: (!directives.is_empty()).then_some(directives),
+            })
+        }
+        (Some(context), None) => Some(GoItemPreamble {
+            start: context.start,
+            text: context.text.clone(),
+            directives: context.directives.clone(),
+        }),
+        (None, Some(owned)) => Some(owned.clone()),
+        (None, None) => None,
+    }
+}
+
 impl<'a> JsDocContext<'a> {
     fn new(source: &'a str, root: Node<'_>) -> Self {
         let mut comments = Vec::new();
@@ -2064,35 +2291,43 @@ impl<'a> JsDocContext<'a> {
     }
 
     fn leading_item_docs(&self, node: Node<'_>) -> Option<String> {
-        let mut anchor = node.start_byte();
-        let mut owned = Vec::new();
-
-        while let Some(comment) = self
-            .comments
-            .iter()
-            .rev()
-            .find(|comment| comment.end <= anchor)
-            .copied()
-        {
-            let gap = &self.source[comment.end..anchor];
-            if !gap.trim().is_empty() || js_gap_has_blank_line(gap) {
-                break;
-            }
-            let line_start = self.source[..comment.start]
-                .rfind('\n')
-                .map_or(0, |index| index + 1);
-            if !self.source[line_start..comment.start].trim().is_empty() {
-                break;
-            }
-            owned.push(comment);
-            anchor = comment.start;
-        }
-
-        owned.reverse();
+        let owned = leading_comment_ranges(self.source, &self.comments, node);
         let first = owned.first()?;
         let last = owned.last()?;
         Some(trimmed_text(self.source, first.start, last.end))
     }
+}
+
+fn leading_comment_ranges(
+    source: &str,
+    comments: &[JsCommentRange],
+    node: Node<'_>,
+) -> Vec<JsCommentRange> {
+    let mut anchor = node.start_byte();
+    let mut owned = Vec::new();
+
+    while let Some(comment) = comments
+        .iter()
+        .rev()
+        .find(|comment| comment.end <= anchor)
+        .copied()
+    {
+        let gap = &source[comment.end..anchor];
+        if !gap.trim().is_empty() || js_gap_has_blank_line(gap) {
+            break;
+        }
+        let line_start = source[..comment.start]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        if !source[line_start..comment.start].trim().is_empty() {
+            break;
+        }
+        owned.push(comment);
+        anchor = comment.start;
+    }
+
+    owned.reverse();
+    owned
 }
 
 fn collect_js_comment_ranges(node: Node<'_>, comments: &mut Vec<JsCommentRange>) {
@@ -2194,52 +2429,193 @@ fn rust_comment_trails_prior_code(comment: Node<'_>) -> bool {
     false
 }
 
-fn first_go_spec_name(node: Node<'_>, source: &str) -> Option<String> {
+fn rust_gap_has_blank_line(gap: &str) -> bool {
+    let normalized = gap.replace("\r\n", "\n").replace('\r', "\n");
+    normalized.bytes().filter(|byte| *byte == b'\n').count() >= 2
+}
+
+fn go_declaration_is_grouped(node: Node<'_>) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|child| matches!(child.kind(), "(" | "var_spec_list"))
+}
+
+fn go_declaration_specs(node: Node<'_>, is_const: bool) -> Vec<Node<'_>> {
+    let expected = if is_const { "const_spec" } else { "var_spec" };
+    let mut specs = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if matches!(child.kind(), "const_spec" | "var_spec") {
-            if let Some(name) = child.child_by_field_name("name") {
-                return Some(trimmed_node_text(name, source));
-            }
-            let mut spec_cursor = child.walk();
-            if let Some(identifier) = child
-                .named_children(&mut spec_cursor)
-                .find(|node| node.kind() == "identifier")
-            {
-                return Some(trimmed_node_text(identifier, source));
-            }
+        if child.kind() == expected {
+            specs.push(child);
+        } else if child.kind() == "var_spec_list" {
+            let mut list_cursor = child.walk();
+            specs.extend(
+                child
+                    .named_children(&mut list_cursor)
+                    .filter(|spec| spec.kind() == expected),
+            );
         }
     }
-    None
+    specs
+}
+
+fn go_spec_names(node: Node<'_>, source: &str) -> Vec<String> {
+    let mut cursor = node.walk();
+    node.children_by_field_name("name", &mut cursor)
+        .filter(|name| matches!(name.kind(), "identifier" | "type_identifier"))
+        .map(|name| trimmed_node_text(name, source))
+        .collect()
+}
+
+fn go_prefixed_spec(keyword: &str, owned_node: Node<'_>, spec: Node<'_>, source: &str) -> String {
+    if owned_node.id() == spec.id() {
+        format!("{keyword} {}", trimmed_node_text(spec, source))
+    } else {
+        trimmed_node_text(owned_node, source)
+    }
 }
 
 fn extract_go_receiver_type(receiver: Node<'_>, source: &str) -> Option<String> {
-    let text = trimmed_node_text(receiver, source);
-    let without_punctuation = text
-        .trim_matches(|character| matches!(character, '(' | ')'))
-        .replace(['*', '[', ']'], "");
-    let receiver_type = without_punctuation
-        .split_whitespace()
-        .last()
-        .unwrap_or(without_punctuation.trim());
-    extract_type_name(receiver_type)
+    let mut cursor = receiver.walk();
+    receiver.named_children(&mut cursor).find_map(|parameter| {
+        parameter
+            .child_by_field_name("type")
+            .and_then(|node| extract_go_nominal_type(node, source))
+            .or_else(|| extract_go_nominal_type(parameter, source))
+    })
 }
 
-fn extract_type_name(target: &str) -> Option<String> {
-    let candidate = target
-        .trim()
-        .split('<')
-        .next()
-        .unwrap_or(target)
-        .trim_start_matches('&')
-        .trim_start_matches("mut ")
-        .trim_start_matches('(')
-        .trim_end_matches(')')
-        .rsplit("::")
-        .next()
-        .unwrap_or(target)
-        .trim();
-    (!candidate.is_empty()).then(|| candidate.to_owned())
+fn extract_go_nominal_type(node: Node<'_>, source: &str) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => Some(trimmed_node_text(node, source)),
+        "qualified_type" => node
+            .child_by_field_name("name")
+            .map(|name| trimmed_node_text(name, source)),
+        "generic_type" => node
+            .child_by_field_name("type")
+            .and_then(|inner| extract_go_nominal_type(inner, source)),
+        "pointer_type" | "parameter_declaration" => {
+            if let Some(type_node) = node.child_by_field_name("type") {
+                return extract_go_nominal_type(type_node, source);
+            }
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .find_map(|child| extract_go_nominal_type(child, source))
+        }
+        _ => None,
+    }
+}
+
+fn parse_go_type_members(node: Node<'_>, docs: &GoDocContext<'_>) -> Vec<AstItem> {
+    match node.kind() {
+        "struct_type" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .find(|child| child.kind() == "field_declaration_list")
+                .map(|fields| {
+                    let mut fields_cursor = fields.walk();
+                    fields
+                        .named_children(&mut fields_cursor)
+                        .filter(|field| field.kind() == "field_declaration")
+                        .flat_map(|field| parse_go_struct_field_items(field, docs))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+        "interface_type" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .filter_map(|member| parse_go_interface_member(member, docs))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn parse_go_struct_field_items(node: Node<'_>, docs: &GoDocContext<'_>) -> Vec<AstItem> {
+    let source = docs.source;
+    let preamble = docs.leading_item_preamble(node);
+    let signature = trimmed_node_text(node, source);
+    let mut names = {
+        let mut cursor = node.walk();
+        node.children_by_field_name("name", &mut cursor)
+            .map(|name| trimmed_node_text(name, source))
+            .collect::<Vec<_>>()
+    };
+    if names.is_empty()
+        && let Some(type_node) = node.child_by_field_name("type")
+        && let Some(name) = extract_go_embedded_name(type_node, source)
+    {
+        names.push(name);
+    }
+    names
+        .into_iter()
+        .map(|name| AstItem {
+            kind: AstItemKind::Field,
+            name: Some(name.clone()),
+            associated_type: None,
+            location: location_for_go_node(node, preamble.as_ref(), source),
+            docs: preamble.as_ref().map(|preamble| preamble.text.clone()),
+            inner_docs: None,
+            attributes: preamble
+                .as_ref()
+                .and_then(|preamble| preamble.directives.clone()),
+            source_preamble: preamble.as_ref().map(|preamble| preamble.text.clone()),
+            summary: format!("field {name}"),
+            signature: Some(signature.clone()),
+            body: Some(signature.clone()),
+            children: Vec::new(),
+        })
+        .collect()
+}
+
+fn parse_go_interface_member(node: Node<'_>, docs: &GoDocContext<'_>) -> Option<AstItem> {
+    let source = docs.source;
+    let preamble = docs.leading_item_preamble(node);
+    let signature = trimmed_node_text(node, source);
+    let (kind, name, summary) = match node.kind() {
+        "method_elem" => {
+            let name = child_text_by_field(node, "name", source)?;
+            (AstItemKind::Function, name.clone(), format!("fn {name}"))
+        }
+        "type_elem" => {
+            let name = extract_go_embedded_name(node, source).unwrap_or_else(|| signature.clone());
+            (AstItemKind::Field, name.clone(), format!("type {name}"))
+        }
+        _ => return None,
+    };
+    Some(AstItem {
+        kind,
+        name: Some(name),
+        associated_type: None,
+        location: location_for_go_node(node, preamble.as_ref(), source),
+        docs: preamble.as_ref().map(|preamble| preamble.text.clone()),
+        inner_docs: None,
+        attributes: preamble
+            .as_ref()
+            .and_then(|preamble| preamble.directives.clone()),
+        source_preamble: preamble.as_ref().map(|preamble| preamble.text.clone()),
+        summary,
+        signature: Some(signature.clone()),
+        body: Some(signature),
+        children: Vec::new(),
+    })
+}
+
+fn extract_go_embedded_name(node: Node<'_>, source: &str) -> Option<String> {
+    match node.kind() {
+        "type_identifier" => Some(trimmed_node_text(node, source)),
+        "qualified_type" => Some(trimmed_node_text(node, source)),
+        "generic_type" => node
+            .child_by_field_name("type")
+            .and_then(|inner| extract_go_embedded_name(inner, source)),
+        "pointer_type" | "type_elem" => {
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .find_map(|child| extract_go_embedded_name(child, source))
+        }
+        _ => None,
+    }
 }
 
 fn assignment_target_name(node: Node<'_>, source: &str) -> Option<String> {
@@ -2378,41 +2754,18 @@ fn unwrap_js_parenthesized_expression(mut node: Node<'_>) -> Node<'_> {
     node
 }
 
-fn js_declaration_start_node(mut node: Node<'_>) -> Node<'_> {
-    let Some(previous) = node.prev_named_sibling() else {
-        return node;
-    };
-    if previous.kind() != "decorator" {
-        return node;
+fn js_declaration_start_node(node: Node<'_>) -> Node<'_> {
+    let mut owned_start = node;
+    let mut previous = node.prev_named_sibling();
+    while let Some(sibling) = previous {
+        match sibling.kind() {
+            "decorator" => owned_start = sibling,
+            "comment" => {}
+            _ => break,
+        }
+        previous = sibling.prev_named_sibling();
     }
-    node = previous;
-
-    while let Some(previous) = node.prev_named_sibling() {
-        if previous.kind() == "decorator" {
-            node = previous;
-            continue;
-        }
-        if previous.kind() != "comment" {
-            break;
-        }
-        let mut probe = previous;
-        let mut found_decorator = false;
-        while let Some(earlier) = probe.prev_named_sibling() {
-            if earlier.kind() == "comment" {
-                probe = earlier;
-                continue;
-            }
-            if earlier.kind() == "decorator" {
-                node = earlier;
-                found_decorator = true;
-            }
-            break;
-        }
-        if !found_decorator {
-            break;
-        }
-    }
-    node
+    owned_start
 }
 
 fn js_owned_node_text(start_node: Node<'_>, end_node: Node<'_>, source: &str) -> String {
@@ -2520,6 +2873,33 @@ fn location_for_node(node: Node<'_>, source: &str) -> AstLocationRange {
     )
 }
 
+fn location_for_go_node(
+    node: Node<'_>,
+    preamble: Option<&GoItemPreamble>,
+    source: &str,
+) -> AstLocationRange {
+    let start_byte = preamble.map_or_else(|| node.start_byte(), |preamble| preamble.start);
+    AstLocationRange::from_source_span(
+        source,
+        point_for_byte(source, start_byte),
+        node.end_position(),
+        start_byte,
+        node.end_byte(),
+    )
+}
+
+fn point_for_byte(source: &str, byte: usize) -> Point {
+    let prefix = &source[..byte];
+    let row = prefix
+        .bytes()
+        .filter(|character| *character == b'\n')
+        .count();
+    let column = prefix
+        .rsplit_once('\n')
+        .map_or(prefix.len(), |(_, line)| line.len());
+    Point::new(row, column)
+}
+
 fn location_for_rust_node(
     node: Node<'_>,
     preamble: &RustItemPreamble,
@@ -2589,7 +2969,7 @@ fn is_python_string_literal(node: Node<'_>, source: &str) -> bool {
                 .take_while(|character| !matches!(character, '\'' | '"'))
                 .collect::<String>()
                 .to_ascii_lowercase();
-            !prefix.contains('b') && !prefix.contains('f')
+            !prefix.contains('b') && !prefix.contains('f') && !prefix.contains('t')
         }
         _ => false,
     }
@@ -2637,8 +3017,14 @@ fn canonical_rust_type_path(path: &str) -> String {
 
 #[derive(Debug)]
 struct CompiledAstSelector {
-    item_patterns: Vec<globset::GlobMatcher>,
+    item_patterns: Vec<CompiledItemSelectorPattern>,
     type_patterns: Vec<CompiledTypeSelectorPattern>,
+}
+
+#[derive(Debug)]
+struct CompiledItemSelectorPattern {
+    matcher: globset::GlobMatcher,
+    is_qualified: bool,
 }
 
 #[derive(Debug)]
@@ -2681,10 +3067,15 @@ fn item_matches_selector(
 ) -> bool {
     let item_match = item_path
         .map(|path| {
-            selector
-                .item_patterns
-                .iter()
-                .any(|pattern| pattern.is_match(path))
+            selector.item_patterns.iter().any(|pattern| {
+                pattern.matcher.is_match(path)
+                    || !pattern.is_qualified
+                        && item.associated_type.is_some()
+                        && item
+                            .name
+                            .as_deref()
+                            .is_some_and(|name| pattern.matcher.is_match(name))
+            })
         })
         .unwrap_or(false);
     let type_match = (item_supports_type_selection(item) || item.associated_type.is_some())
@@ -2723,6 +3114,14 @@ fn item_supports_type_selection(item: &AstItem) -> bool {
 fn selector_path_for_item(item: &AstItem, parent_context: Option<&str>) -> Option<String> {
     match item.kind {
         AstItemKind::Impl => impl_selector_path(item, parent_context),
+        AstItemKind::Function if item.associated_type.is_some() => {
+            let receiver = item.associated_type.as_deref()?;
+            let name = item.name.as_deref()?;
+            Some(join_selector_path(
+                parent_context,
+                &format!("{receiver}.{name}"),
+            ))
+        }
         _ => item
             .name
             .as_deref()
@@ -2793,6 +3192,7 @@ fn render_item(
         || item.kind.supports_type_bodies() && options.include_type_bodies;
     let render_rust_preamble =
         language == AstLanguage::Rust && (render_full_body || options.include_signatures);
+    let render_go_preamble = language == AstLanguage::Go && render_full_body;
     let text = if render_full_body {
         item.body.as_deref().unwrap_or(&item.summary)
     } else if options.include_signatures {
@@ -2803,7 +3203,7 @@ fn render_item(
 
     let include_separate_docs =
         options.include_docs && !(render_full_body && language == AstLanguage::Python);
-    let preamble = if render_rust_preamble {
+    let preamble = if render_rust_preamble || render_go_preamble {
         if include_separate_docs {
             item.source_preamble.as_deref()
         } else {
@@ -3040,6 +3440,7 @@ export enum Mode {
 
     const GO_SAMPLE: &str = r#"
 // package docs
+package sample
 
 // Greeter docs
 type Greeter struct {
@@ -3429,7 +3830,7 @@ func (g Greeter) Greet(name string) string {
             ..AstRenderOptions::default()
         });
         assert!(rendered.contains("pub use crate::api::Thing;"));
-        assert!(rendered.contains("#[macro_export]\nmacro exported"));
+        assert!(rendered.contains("#[macro_export]\nmacro_rules! exported"));
         assert!(rendered.contains("unsafe extern \"C\""));
         assert!(rendered.contains("> pub safe fn foreign(value: i32) -> i32;"));
         assert!(rendered.contains("> pub static FOREIGN: i32;"));
@@ -3486,6 +3887,40 @@ func (g Greeter) Greet(name string) string {
             "fn before() {} // belongs to before\nfn replacement() {}\nfn after() {}\n"
         );
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rust_detached_ordinary_comments_are_not_item_preambles() {
+        let source = "// section banner\r\n\r\n/// selected docs\r\n#[inline]\r\nfn selected() {}\r\n\r\nmod nested {\r\n    // nested section\r\n\r\n    fn child() {}\r\n}\r\n";
+        let ast = FileAst::parse(AstLanguage::Rust, source).unwrap();
+        let selected = &ast.items[0];
+        assert_eq!(selected.docs.as_deref(), Some("/// selected docs"));
+        assert_eq!(selected.attributes.as_deref(), Some("#[inline]"));
+        assert_eq!(
+            selected.source_preamble.as_deref(),
+            Some("/// selected docs\n#[inline]")
+        );
+        assert_eq!(selected.location.start_line, 2);
+
+        let child = &ast.items[1].children[0];
+        assert_eq!(child.name.as_deref(), Some("child"));
+        assert_eq!(child.source_preamble, None);
+        assert_eq!(child.attributes, None);
+        assert_eq!(child.location.start_line, 9);
+    }
+
+    #[test]
+    fn rust_macro_rules_items_use_source_syntax_in_summaries_and_signatures() {
+        let ast = FileAst::parse(
+            AstLanguage::Rust,
+            "#[macro_export]\nmacro_rules! exported { ($value:expr) => { $value } }\n",
+        )
+        .unwrap();
+        let item = &ast.items[0];
+        assert_eq!(item.summary, "macro_rules! exported");
+        assert_eq!(item.signature.as_deref(), Some("macro_rules! exported"));
+        assert_eq!(item.attributes.as_deref(), Some("#[macro_export]"));
+        assert!(item.body.as_deref().unwrap().contains("($value:expr)"));
     }
 
     #[test]
@@ -3656,7 +4091,7 @@ func (g Greeter) Greet(name string) string {
 
         assert_eq!(
             ast.render(AstRenderOptions::default()),
-            "struct Greeter\ninterface Runner\nconst DefaultName\nvar Count\nfunc NewGreeter\nmethod Greeter.Greet"
+            "struct Greeter\n> field Name\ninterface Runner\n> fn Run\nconst DefaultName\nvar Count\nfunc NewGreeter\nmethod Greeter.Greet"
         );
     }
 
@@ -3670,7 +4105,7 @@ func (g Greeter) Greet(name string) string {
                 include_docs: true,
                 ..AstRenderOptions::default()
             }),
-            "// package docs\n// Greeter docs\ntype Greeter struct {\n    Name string\n}\ntype Runner interface {\n    // Run docs\n    Run(task string) string\n}\nconst DefaultName = \"world\"\nvar Count int\nfunc NewGreeter(name string) Greeter\nfunc (g Greeter) Greet(name string) string"
+            "// package docs\n// Greeter docs\ntype Greeter struct\n> Name string\ntype Runner interface\n> // Run docs\n> Run(task string) string\nconst DefaultName = \"world\"\nvar Count int\nfunc NewGreeter(name string) Greeter\nfunc (g Greeter) Greet(name string) string"
         );
     }
 
@@ -3688,7 +4123,316 @@ func (g Greeter) Greet(name string) string {
             )
             .unwrap();
 
-        assert_eq!(rendered, "struct Greeter\nmethod Greeter.Greet");
+        assert_eq!(
+            rendered,
+            "struct Greeter\n> field Name\nmethod Greeter.Greet"
+        );
+    }
+
+    #[test]
+    fn go_declaration_specs_have_independent_names_docs_and_locations() {
+        let source = "package sample\n\ntype (\n    // Record docs\n    Record struct { Value int }\n    Alias = map[string]int\n)\n\nconst (\n    // paired values\n    First, Second = 1, 2\n    Third = 3\n)\nvar One, Two int\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions::default()),
+            "struct Record\n> field Value\ntype Alias\nconst First\nconst Second\nconst Third\nvar One\nvar Two"
+        );
+        let second = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Second".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions {
+                    include_signatures: true,
+                    include_docs: true,
+                    include_locations: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            second,
+            "// paired values\n[9-11 shared-line] const First, Second = 1, 2"
+        );
+        assert!(!ast.items[2].location.is_edit_ready);
+        assert!(!ast.items[3].location.is_edit_ready);
+        assert!(!ast.items[5].location.is_edit_ready);
+        assert!(!ast.items[6].location.is_edit_ready);
+        assert_eq!(ast.items[0].location.display(), "3-5");
+        assert!(ast.items[0].location.is_edit_ready);
+
+        let record = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Record".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions {
+                    include_type_bodies: true,
+                    include_docs: true,
+                    include_locations: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            record,
+            "// Record docs\n[3-5] type Record struct { Value int }"
+        );
+
+        let alias = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Alias".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions {
+                    include_signatures: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(alias, "type Alias = map[string]int");
+    }
+
+    #[test]
+    fn go_receiver_types_and_method_selectors_are_structural() {
+        let source = "package sample\n\ntype Box[T any] struct { Value T }\nfunc (b *Box[T]) Pointer() {}\nfunc (Box[T]) Unnamed() {}\nfunc (b Box[T]) Value() {}\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+
+        for (selector, expected) in [
+            ("Box.Pointer", "method Box.Pointer"),
+            ("Box.Unnamed", "method Box.Unnamed"),
+            ("Unnamed", "method Box.Unnamed"),
+        ] {
+            assert_eq!(
+                ast.render_with_selector(
+                    &AstSelector {
+                        item_patterns: vec![selector.to_owned()],
+                        type_patterns: Vec::new(),
+                    },
+                    AstRenderOptions::default(),
+                )
+                .unwrap(),
+                expected
+            );
+        }
+
+        assert_eq!(
+            ast.render_with_selector(
+                &AstSelector {
+                    item_patterns: Vec::new(),
+                    type_patterns: vec!["Box".to_owned()],
+                },
+                AstRenderOptions::default(),
+            )
+            .unwrap(),
+            "struct Box\n> field Value\nmethod Box.Pointer\nmethod Box.Unnamed\nmethod Box.Value"
+        );
+    }
+
+    #[test]
+    fn go_root_docs_are_anchored_to_the_package_clause() {
+        let source = "//go:build linux\n// +build linux\n\n// Copyright Example\n\n// Package sample demonstrates docs.\npackage sample\n\n// Item docs.\nfunc Item() {}\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "//go:build linux\n// +build linux\n\n// Copyright Example\n\n// Package sample demonstrates docs.\n// Item docs.\nfunc Item"
+        );
+        assert_eq!(ast.items[0].location.display(), "8-10");
+    }
+
+    #[test]
+    fn go_requires_a_complete_source_file_shape() {
+        for (source, expected_line) in [
+            ("", 0),
+            ("func MissingPackage() {}\n", 0),
+            ("const Before = 1\npackage sample\n", 0),
+            ("package first\npackage second\n", 1),
+            ("package sample\nvalue := 1\n", 1),
+            ("package sample\nreturn\n", 1),
+        ] {
+            let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+            assert!(
+                ast.has_errors,
+                "accepted invalid complete Go file: {source:?}"
+            );
+            assert_eq!(
+                ast.first_error.map(|error| error.line),
+                Some(expected_line),
+                "wrong error location for {source:?}"
+            );
+        }
+
+        let valid = FileAst::parse(
+            AstLanguage::Go,
+            "//go:build linux\n\n// Package sample docs.\npackage sample\n\nimport \"fmt\"\nvar Value = fmt.Sprint(1)\n",
+        )
+        .unwrap();
+        assert!(!valid.has_errors);
+        assert_eq!(valid.first_error, None);
+    }
+
+    #[test]
+    fn go_grouped_var_specs_are_independent_and_group_context_renders_once() {
+        let source = "package sample\n\n// Types group.\ntype (\n    TypeA int\n    TypeB = string\n)\n\n// Constants group.\nconst (\n    ConstantA = 1\n    ConstantB = 2\n)\n\n// Variables group.\nvar (\n    // Alpha docs.\n    Alpha int\n    Beta string\n)\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+        let rendered = ast.render(AstRenderOptions {
+            include_signatures: true,
+            include_docs: true,
+            ..AstRenderOptions::default()
+        });
+
+        for group_doc in [
+            "// Types group.",
+            "// Constants group.",
+            "// Variables group.",
+        ] {
+            assert_eq!(rendered.matches(group_doc).count(), 1, "{rendered}");
+        }
+        assert!(rendered.contains("type TypeA int\ntype TypeB = string"));
+        assert!(rendered.contains("const ConstantA = 1\nconst ConstantB = 2"));
+        assert!(rendered.contains("// Alpha docs.\nvar Alpha int\nvar Beta string"));
+
+        let beta = ast
+            .render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Beta".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions {
+                    include_signatures: true,
+                    include_docs: true,
+                    include_locations: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(beta, "[18-19] var Beta string");
+        let beta_item = ast
+            .select_items(&AstSelector {
+                item_patterns: vec!["Beta".to_owned()],
+                type_patterns: Vec::new(),
+            })
+            .unwrap()
+            .remove(0);
+        assert!(beta_item.location.is_edit_ready);
+    }
+
+    #[test]
+    fn go_type_signatures_omit_bodies_while_type_bodies_are_complete() {
+        let ast = FileAst::parse(
+            AstLanguage::Go,
+            "package sample\n\ntype Record[T any] struct {\n    Value T\n}\ntype Service interface {\n    Run(T) error\n}\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_signatures: true,
+                ..AstRenderOptions::default()
+            }),
+            "type Record[T any] struct\n> Value T\ntype Service interface\n> Run(T) error"
+        );
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_type_bodies: true,
+                ..AstRenderOptions::default()
+            }),
+            "type Record[T any] struct {\n    Value T\n}\ntype Service interface {\n    Run(T) error\n}"
+        );
+    }
+
+    #[test]
+    fn go_functions_include_direct_local_declarations_only() {
+        let source = "package sample\n\nfunc Work() {\n    const LocalA, LocalB = 1, 2\n    type Local = int\n    var LocalValue string\n    if true {\n        var Nested int\n    }\n}\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+
+        assert_eq!(
+            ast.render(AstRenderOptions::default()),
+            "func Work\n> const LocalA\n> const LocalB\n> type Local\n> var LocalValue"
+        );
+        assert!(!ast.render(AstRenderOptions::default()).contains("Nested"));
+    }
+
+    #[test]
+    fn go_preambles_include_adjacent_directives_but_not_trailing_comments() {
+        let source = "package sample\n\nvar prior int // belongs to prior\n//go:noinline\n// Work docs.\nfunc Work() {}\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+        let work = &ast.items[1];
+
+        assert_eq!(work.docs.as_deref(), Some("//go:noinline\n// Work docs."));
+        assert_eq!(work.location.display(), "3-6");
+        assert!(!work.docs.as_deref().unwrap().contains("belongs"));
+        assert_eq!(
+            ast.render(AstRenderOptions {
+                include_function_bodies: true,
+                include_docs: true,
+                ..AstRenderOptions::default()
+            }),
+            "var prior\n//go:noinline\n// Work docs.\nfunc Work() {}"
+        );
+        assert_eq!(
+            ast.render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["Work".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions {
+                    include_function_bodies: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap(),
+            "//go:noinline\nfunc Work() {}"
+        );
+    }
+
+    #[test]
+    fn go_struct_and_interface_members_have_qualified_selectors() {
+        let source = "package sample\n\ntype Record struct {\n    Left, Right int\n    embedded.Type\n}\ntype API interface {\n    // Call docs.\n    Call(string) error\n    Embedded\n    ~int | ~string\n}\n";
+        let ast = FileAst::parse(AstLanguage::Go, source).unwrap();
+
+        for (selector, expected) in [
+            ("Record.Left", "field Left"),
+            ("Record.Right", "field Right"),
+            ("Record.embedded.Type", "field embedded.Type"),
+            ("API.Call", "fn Call"),
+            ("API.Embedded", "type Embedded"),
+        ] {
+            assert_eq!(
+                ast.render_with_selector(
+                    &AstSelector {
+                        item_patterns: vec![selector.to_owned()],
+                        type_patterns: Vec::new(),
+                    },
+                    AstRenderOptions::default(),
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            ast.render_with_selector(
+                &AstSelector {
+                    item_patterns: vec!["API.Call".to_owned()],
+                    type_patterns: Vec::new(),
+                },
+                AstRenderOptions {
+                    include_signatures: true,
+                    include_docs: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap(),
+            "// Call docs.\nCall(string) error"
+        );
     }
 
     #[test]
@@ -3913,6 +4657,26 @@ func (g Greeter) Greet(name string) string {
         );
         assert!(rendered.contains("class NotDocs:"));
         assert!(!rendered.contains("an operator still makes"));
+    }
+
+    #[test]
+    fn python_template_strings_are_not_docstrings() {
+        let ast = FileAst::parse(
+            AstLanguage::Python,
+            "t\"module template\"\n\nclass Container:\n    (T\"class \" \"template\")\n\n    def method(self):\n        (\n            t\"method \"\n            # concatenation bridge\n            \"template\"\n        )\n        return None\n",
+        )
+        .unwrap();
+        assert!(!ast.has_errors);
+        assert_eq!(ast.root_docs, None);
+        assert_eq!(ast.items[0].docs, None);
+        assert_eq!(ast.items[0].children[0].docs, None);
+
+        let rendered = ast.render(AstRenderOptions {
+            include_signatures: true,
+            include_docs: true,
+            ..AstRenderOptions::default()
+        });
+        assert_eq!(rendered, "class Container:\n> def method(self):");
     }
 
     #[test]
@@ -4425,6 +5189,35 @@ export const first = () => {}, ignored = 1,
     }
 
     #[test]
+    fn javascript_and_typescript_callables_in_any_multi_declaration_are_not_edit_ready() {
+        for (language, source) in [
+            (
+                AstLanguage::JavaScript,
+                "const callable = () => {}, scalar = 1;\nconst other = function () {}, { value } = source;\nconst standalone = () => {};\n",
+            ),
+            (
+                AstLanguage::TypeScript,
+                "const callable = (): void => {}, scalar: number = 1;\nconst other = function (): void {}, { value } = source;\nconst standalone = (): void => {};\n",
+            ),
+        ] {
+            let ast = FileAst::parse(language, source).unwrap();
+            assert!(!ast.has_errors);
+            assert_eq!(
+                ast.items
+                    .iter()
+                    .map(|item| item.name.as_deref().unwrap())
+                    .collect::<Vec<_>>(),
+                ["callable", "other", "standalone"]
+            );
+            assert!(!ast.items[0].location.is_edit_ready);
+            assert!(!ast.items[1].location.is_edit_ready);
+            assert!(ast.items[2].location.is_edit_ready);
+            assert!(ast.items[0].location.display().ends_with(" shared-line"));
+            assert!(ast.items[1].location.display().ends_with(" shared-line"));
+        }
+    }
+
+    #[test]
     fn malformed_javascript_reports_errors_and_shared_line_locations_are_annotated() {
         let malformed = FileAst::parse(
             AstLanguage::JavaScript,
@@ -4707,6 +5500,48 @@ export declare function exported<T>(value: T): T;
     }
 
     #[test]
+    fn typescript_export_bindings_are_recognized_from_syntax_across_trivia() {
+        let source = r#"export as
+/* namespace bridge */ namespace
+Widget;
+export /* assignment bridge */ =
+Widget;
+declare module "asset" {
+    const content: string;
+    export /* default bridge */ default
+    content;
+}
+"#;
+        let ast = FileAst::parse(AstLanguage::TypeScript, source).unwrap();
+        assert!(!ast.has_errors);
+
+        for (selector, fragments) in [
+            ("export-as-namespace", &["namespace bridge", "Widget;"][..]),
+            ("export=", &["assignment bridge", "=", "Widget;"][..]),
+            ("asset.default", &["default bridge", "content;"][..]),
+        ] {
+            let rendered = ast
+                .render_with_selector(
+                    &AstSelector {
+                        item_patterns: vec![selector.to_owned()],
+                        type_patterns: Vec::new(),
+                    },
+                    AstRenderOptions {
+                        include_signatures: true,
+                        ..AstRenderOptions::default()
+                    },
+                )
+                .unwrap();
+            for fragment in fragments {
+                assert!(
+                    rendered.contains(fragment),
+                    "missing {fragment:?} for {selector:?} in {rendered:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn typescript_namespaces_overloads_and_abstract_summaries_are_structural() {
         let source = r#"namespace Simple { export function overloaded(value: string): string; }
 namespace A.B { export const value = () => 1; }
@@ -4768,6 +5603,7 @@ const enum Mode { A }
     @first
     // between decorators
     @second
+    // after final decorator
     method<T>(value: T): T { return value; }
 
     @field
@@ -4794,7 +5630,7 @@ const enum Mode { A }
                 },
             )
             .unwrap(),
-            "/** method docs */\n[2-6] @first\n      // between decorators\n      @second\n      method<T>(value: T): T"
+            "/** method docs */\n[2-7] @first\n      // between decorators\n      @second\n      // after final decorator\n      method<T>(value: T): T"
         );
         assert_eq!(
             ast.render_with_selector(
@@ -4805,7 +5641,7 @@ const enum Mode { A }
                 },
             )
             .unwrap(),
-            "@first\n// between decorators\n@second\nmethod<T>(value: T): T { return value; }"
+            "@first\n// between decorators\n@second\n// after final decorator\nmethod<T>(value: T): T { return value; }"
         );
         assert_eq!(
             ast.render_with_selector(
@@ -4835,6 +5671,79 @@ const enum Mode { A }
             .unwrap(),
             "@observe\nget current(): number { return 1; }"
         );
+
+        for selector in ["Decorated.handler", "Decorated.current"] {
+            let rendered = ast
+                .render_with_selector(
+                    &AstSelector {
+                        item_patterns: vec![selector.to_owned()],
+                        type_patterns: Vec::new(),
+                    },
+                    AstRenderOptions {
+                        include_signatures: true,
+                        include_locations: true,
+                        ..AstRenderOptions::default()
+                    },
+                )
+                .unwrap();
+            assert!(
+                rendered.starts_with('['),
+                "missing location in {rendered:?}"
+            );
+            assert!(rendered.contains('@'), "missing decorator in {rendered:?}");
+        }
+    }
+
+    #[test]
+    fn typescript_decorated_classes_own_inter_decorator_comments() {
+        let source = r#"/** service docs */
+@sealed
+// decorator bridge
+@registered()
+// final decorator bridge
+class Service {
+    run(): void {}
+}
+"#;
+        let ast = FileAst::parse(AstLanguage::TypeScript, source).unwrap();
+        assert!(!ast.has_errors);
+        let selector = AstSelector {
+            item_patterns: Vec::new(),
+            type_patterns: vec!["Service".to_owned()],
+        };
+        let signature = ast
+            .render_with_selector(
+                &selector,
+                AstRenderOptions {
+                    include_signatures: true,
+                    include_docs: true,
+                    include_locations: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(signature.starts_with("/** service docs */\n[1-8] @sealed"));
+        for fragment in [
+            "// decorator bridge",
+            "@registered()",
+            "// final decorator bridge",
+            "class Service",
+        ] {
+            assert!(signature.contains(fragment), "{signature:?}");
+        }
+
+        let body = ast
+            .render_with_selector(
+                &selector,
+                AstRenderOptions {
+                    include_type_bodies: true,
+                    ..AstRenderOptions::default()
+                },
+            )
+            .unwrap();
+        assert!(body.starts_with(
+            "@sealed\n// decorator bridge\n@registered()\n// final decorator bridge\nclass Service"
+        ));
     }
 
     #[test]

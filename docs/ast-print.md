@@ -55,9 +55,26 @@ For JavaScript and TypeScript, the output can include items such as:
 For Go, the output can include items such as:
 
 - functions and methods
-- structs, interfaces, and type aliases
-- const and var declarations
-- leading file/item comments with `--doc`
+- structs, interfaces, defined types, and type aliases, including independently selectable specs
+  inside grouped `type` declarations
+- named and embedded struct fields, interface methods, embedded interfaces, and type elements
+- every name in grouped or multi-name `const` and `var` declarations
+- declarations directly inside function and method bodies
+- generic, pointer, value, and unnamed method receivers under qualified paths such as `Box.Get`
+- build constraints, license headers, package docs, item docs, and compiler directives with `--doc`
+
+Go source is anchored by its `package` clause. Comments before that clause are rendered as file
+documentation, while adjacent comments and directives after it belong to the following declaration.
+Comments trailing earlier code are not claimed by the next item. Go declaration locations include
+owned adjacent comments. Multi-name declarations share one source span and are therefore marked
+`shared-line`; grouped specs on separate lines have independently usable locations. Full-body
+rendering preserves behavior-affecting `//go:` and `//line` directives even without `--doc`.
+Comments on an entire parenthesized declaration group are shown once before its first spec as
+context; they are not included in that spec's independently usable location.
+
+Go inputs must be complete source files: exactly one `package` clause must precede every non-comment
+syntax item, and statements are not accepted at file scope. Snippets that Tree-sitter can recover as
+an outline are rejected with a source location instead of producing partial or misleading output.
 
 For JavaScript-like files, an initial comment block separated from the first syntax item by a
 blank line is file documentation. A comment immediately adjacent to an item belongs only to that
@@ -189,7 +206,9 @@ command fails only when the selector matches no item in any input file.
 
 Type selectors also work for Python classes and type aliases, including qualified nested paths,
 and for TypeScript interfaces/classes/enums/type aliases. Qualified TypeScript namespace paths
-such as `-S SDK.Config` disambiguate duplicate local type names; bare names remain supported.
+such as `-S SDK.Config` disambiguate duplicate local type names; bare names remain supported. For
+Go, `-S Box` includes the type's struct/interface members and receiver methods. Item selectors use
+qualified receiver paths such as `-s Box.Get`; bare method names remain supported when convenient.
 
 Selectors can be combined with the other formatting flags:
 
@@ -200,8 +219,9 @@ smartedit ast-print -s 'parser.*' --function-bodies src/parser.rs
 
 `--signatures` renders declaration signatures. For Rust it also preserves outer attributes.
 `--function-bodies` renders full function items. `--type-bodies` renders full class, interface,
-struct, enum, union, type-alias, trait, impl, module, macro-definition, and foreign-block items. A full
-body takes precedence over its signature and summarized children. `--doc` is independent and
+struct, enum, union, type-alias, trait, impl, module, macro-definition, and foreign-block items,
+including Go struct and interface definitions. A full body takes precedence over its signature
+and summarized children. `--doc` is independent and
 adds documentation. Python docstrings are not emitted separately when the requested full body
 already contains them. Rust inline-module `//!` docs are shown as an indented child beneath the
 module declaration in outline/signature modes, which reflects that they document the module from
@@ -275,4 +295,10 @@ Inspect one JavaScript or TypeScript type with nested methods:
 ```bash
 smartedit ast-print -S Greeter --signatures --doc src/example.ts
 smartedit ast-print -S Greeter --signatures src/example.js
+```
+
+Inspect a Go type with fields, interface members, and receiver methods:
+
+```bash
+smartedit ast-print -S Box --signatures --doc src/example.go
 ```

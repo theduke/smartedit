@@ -16,7 +16,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Broader Rust, Python, JavaScript, TypeScript, TSX, and declaration-file AST coverage.
+- Broader Rust, Python, JavaScript, TypeScript, TSX, Go, and declaration-file AST coverage,
+  including Go grouped declarations, members, receiver methods, package docs, and directives.
 - Windows CI coverage, native Windows path parsing, CRLF edit programs, Unicode-aware
   diagnostics, and clean handling of closed stdout pipes.
 - Quoted path operands for edit targets containing whitespace, `#`, or semicolons.
