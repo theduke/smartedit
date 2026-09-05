@@ -1,0 +1,8 @@
+> ast-print --doc --signatures --loc --select Box ./src/service.go
+// Package service demonstrates common Go declarations.
+// Box stores a value with optional metadata.
+[16-22] type Box[T any] struct
+> // Value is the stored value.
+> [18-20] Value T
+> [20-21] Metadata
+===

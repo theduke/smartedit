@@ -1,0 +1,17 @@
+> ast-print --loc ./src/service.go
+[6-8] const DefaultName
+[8-9] const BufferSize
+[11-12] var Version
+[13-15] type Label
+[16-22] struct Box
+> [18-20] field Value
+> [20-21] field Metadata
+[23-27] struct Metadata
+> [25-26] field Source
+[28-32] interface Runner
+> [30-31] fn Run
+[33-39] method Box.Reset
+> [36-37] var zero
+[40-44] func NewBox
+[45-51] func Work
+===

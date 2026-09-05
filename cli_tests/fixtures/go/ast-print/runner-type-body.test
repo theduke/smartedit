@@ -1,0 +1,5 @@
+> ast-print --type-bodies --loc --type-select Runner ./src/service.go
+[28-32] type Runner interface {
+        	Run(Label) error
+        }
+===

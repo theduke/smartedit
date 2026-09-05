@@ -1,0 +1,7 @@
+> ast-print --function-bodies --loc --select Work ./src/service.go
+[45-51] func Work() string {
+        	label := Label(DefaultName)
+        	count := 2
+        	return fmt.Sprintf("%s-%d", label, count)
+        }
+===

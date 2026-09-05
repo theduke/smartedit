@@ -1,0 +1,14 @@
+> apply 'lr src/patch.go:3-6 "func Add(left, right int) int {\n\treturn left - right\n}\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.go
+package service
+
+// TODO: remove this marker after migration.
+func Add(left, right int) int {
+	return left - right
+}
+
+func Greeting() string {
+	return "hello"
+}
+===

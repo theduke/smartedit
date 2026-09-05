@@ -1,0 +1,13 @@
+> apply 'ldm src/patch.go r"TODO"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.go
+package service
+
+func Add(left, right int) int {
+	return left + right
+}
+
+func Greeting() string {
+	return "hello"
+}
+===

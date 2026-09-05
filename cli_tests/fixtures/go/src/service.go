@@ -1,0 +1,51 @@
+// Package service demonstrates common Go declarations.
+package service
+
+import "fmt"
+
+const (
+	// DefaultName is used when no name is supplied.
+	DefaultName = "smartedit"
+	BufferSize  = 4096
+)
+
+var Version = "v1"
+
+// Label is a human-readable name.
+type Label = string
+
+// Box stores a value with optional metadata.
+type Box[T any] struct {
+	// Value is the stored value.
+	Value T
+	Metadata
+}
+
+// Metadata records the source of a value.
+type Metadata struct {
+	Source string
+}
+
+// Runner can process a label.
+type Runner interface {
+	Run(Label) error
+}
+
+// Reset clears the box value.
+//go:noinline
+func (box *Box[T]) Reset() {
+	var zero T
+	box.Value = zero
+}
+
+// NewBox constructs a box.
+func NewBox[T any](value T) Box[T] {
+	return Box[T]{Value: value}
+}
+
+// Work builds a message from local declarations.
+func Work() string {
+	label := Label(DefaultName)
+	count := 2
+	return fmt.Sprintf("%s-%d", label, count)
+}
