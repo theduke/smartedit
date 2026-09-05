@@ -1,0 +1,14 @@
+> ast-print --type-bodies --loc --type-select 'Service.Builder' ./src/Service.java
+[15-27] public static class Builder<U extends Number> {
+            private U value;
+
+            public Builder<U> value(U value) {
+                this.value = value;
+                return this;
+            }
+
+            public Service<U> build() {
+                return new Service<>(value);
+            }
+        }
+===

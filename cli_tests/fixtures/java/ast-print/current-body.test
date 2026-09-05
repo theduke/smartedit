@@ -1,0 +1,5 @@
+> ast-print --function-bodies --loc --select 'Service.current' ./src/Service.java
+[11-14] public T current() {
+            return current;
+        }
+===

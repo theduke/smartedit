@@ -1,0 +1,32 @@
+> apply 'tr src/Service.java r"Service" "Processor"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/Service.java
+package fixtures.service;
+
+import java.util.Objects;
+
+public class Processor<T extends Number> {
+    private final T current;
+
+    public Processor(T current) {
+        this.current = Objects.requireNonNull(current);
+    }
+
+    public T current() {
+        return current;
+    }
+
+    public static class Builder<U extends Number> {
+        private U value;
+
+        public Builder<U> value(U value) {
+            this.value = value;
+            return this;
+        }
+
+        public Processor<U> build() {
+            return new Processor<>(value);
+        }
+    }
+}
+===

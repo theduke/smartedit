@@ -1,0 +1,8 @@
+> ast-print --loc ./src/Service.java
+[4-28] class Service
+> [7-10] method Service
+> [11-14] method current
+> [15-27] class Builder
+>> [18-22] method value
+>> [23-26] method build
+===

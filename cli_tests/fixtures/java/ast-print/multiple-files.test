@@ -1,0 +1,22 @@
+> ast-print --signatures --loc './src/*.java'
+== src/Contracts.java ==
+[2-25] public interface Contracts<T>
+> [3-4] T transform(T value);
+> [5-8] default String label(T value)
+> [9-13] enum Status
+> [14-19] record Result<T>(T value, Status status)
+>> [15-18] public boolean active()
+> [20-24] @interface Marker
+>> [21-22] String name() default "service";
+>> [22-23] int priority() default 1;
+== end src/Contracts.java ==
+
+== src/Service.java ==
+[4-28] public class Service<T extends Number>
+> [7-10] public Service(T current)
+> [11-14] public T current()
+> [15-27] public static class Builder<U extends Number>
+>> [18-22] public Builder<U> value(U value)
+>> [23-26] public Service<U> build()
+== end src/Service.java ==
+===
