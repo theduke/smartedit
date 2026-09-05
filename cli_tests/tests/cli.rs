@@ -8,6 +8,29 @@ use libtest_mimic::{Arguments, Failed, Trial};
 
 static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
 
+// Keep this list in sync with `smartedit::file_ast::AstLanguage`.
+const SUPPORTED_LANGUAGE_FIXTURES: &[&str] = &[
+    "bash",
+    "c",
+    "cpp",
+    "csharp",
+    "go",
+    "java",
+    "javascript",
+    "json",
+    "kotlin",
+    "lua",
+    "php",
+    "python",
+    "ruby",
+    "rust",
+    "scala",
+    "toml",
+    "tsx",
+    "typescript",
+    "yaml",
+];
+
 #[derive(Debug)]
 struct FixtureTest {
     name: String,
@@ -84,19 +107,6 @@ fn workspace_root() -> PathBuf {
 
 fn build_smartedit() -> Result<PathBuf, String> {
     let workspace = workspace_root();
-    let output = Command::new(env!("CARGO"))
-        .args(["build", "--quiet", "--package", "smartedit-cli"])
-        .current_dir(&workspace)
-        .output()
-        .map_err(|error| format!("failed to invoke cargo to build smartedit: {error}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "failed to build smartedit:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
     let test_executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate cli test executable: {error}"))?;
     let profile_dir = test_executable
@@ -108,6 +118,32 @@ fn build_smartedit() -> Result<PathBuf, String> {
                 test_executable.display()
             )
         })?;
+    let profile_dir_name = file_name(profile_dir)?;
+    let cargo_profile = if profile_dir_name == "debug" {
+        "dev"
+    } else {
+        &profile_dir_name
+    };
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--quiet",
+            "--package",
+            "smartedit-cli",
+            "--profile",
+            cargo_profile,
+        ])
+        .current_dir(&workspace)
+        .output()
+        .map_err(|error| format!("failed to invoke cargo to build smartedit: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "failed to build smartedit:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
     let binary = profile_dir.join(format!("smartedit{}", std::env::consts::EXE_SUFFIX));
 
     if !binary.is_file() {
@@ -122,20 +158,64 @@ fn build_smartedit() -> Result<PathBuf, String> {
 
 fn discover_fixture_tests() -> Result<Vec<FixtureTest>, String> {
     let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
-    let mut languages = read_sorted_dirs(&fixtures_dir)?;
+    let language_dirs = read_sorted_dirs(&fixtures_dir)?;
+    let language_names = language_dirs
+        .iter()
+        .map(|path| file_name(path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for language in &language_names {
+        if !SUPPORTED_LANGUAGE_FIXTURES.contains(&language.as_str()) {
+            return Err(format!(
+                "unsupported language fixture directory: {}",
+                fixtures_dir.join(language).display()
+            ));
+        }
+    }
+
     let mut fixtures = Vec::new();
 
-    for language_dir in languages.drain(..) {
-        let language = file_name(&language_dir)?;
+    for language in SUPPORTED_LANGUAGE_FIXTURES {
+        let language_dir = fixtures_dir.join(language);
+        if !language_dir.is_dir() {
+            return Err(format!(
+                "missing fixture directory for supported language `{language}`: {}",
+                language_dir.display()
+            ));
+        }
+
+        let source_dir = language_dir.join("src");
+        if !source_dir.is_dir() {
+            return Err(format!(
+                "missing source fixture directory for supported language `{language}`: {}",
+                source_dir.display()
+            ));
+        }
+        if !directory_contains_file(&source_dir)? {
+            return Err(format!(
+                "source fixture directory for supported language `{language}` is empty: {}",
+                source_dir.display()
+            ));
+        }
+
         for suite in ["ast-print", "apply"] {
             let suite_dir = language_dir.join(suite);
             if !suite_dir.is_dir() {
-                continue;
+                return Err(format!(
+                    "missing `{suite}` fixture suite for supported language `{language}`: {}",
+                    suite_dir.display()
+                ));
             }
 
             let mut specs = Vec::new();
             collect_specs(&suite_dir, &mut specs)?;
             specs.sort();
+            if specs.is_empty() {
+                return Err(format!(
+                    "`{suite}` fixture suite for supported language `{language}` has no .test specifications: {}",
+                    suite_dir.display()
+                ));
+            }
             for spec_path in specs {
                 let relative = spec_path.strip_prefix(&suite_dir).map_err(|error| {
                     format!("failed to name fixture {}: {error}", spec_path.display())
@@ -161,6 +241,21 @@ fn discover_fixture_tests() -> Result<Vec<FixtureTest>, String> {
     }
 
     Ok(fixtures)
+}
+
+fn directory_contains_file(path: &Path) -> Result<bool, String> {
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to inspect {}: {error}", entry.path().display()))?;
+        if file_type.is_file() || (file_type.is_dir() && directory_contains_file(&entry.path())?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn read_sorted_dirs(path: &Path) -> Result<Vec<PathBuf>, String> {
