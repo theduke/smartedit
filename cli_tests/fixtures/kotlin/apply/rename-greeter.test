@@ -1,0 +1,30 @@
+> apply 'tr src/main.kt "Greeter" "Welcomer"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/main.kt
+package fixtures.kotlin
+
+import java.time.Instant
+
+enum class Status {
+    NEW,
+    READY,
+}
+
+data class Welcomer(val prefix: String = "Hello") {
+    fun greet(name: String): String {
+        return "$prefix, $name!"
+    }
+
+    object Defaults {
+        fun create(): Welcomer = Welcomer()
+    }
+}
+
+class Registry {
+    private val entries = mutableListOf<String>()
+
+    fun size(): Int = entries.size
+}
+
+fun topLevel(value: Int): String = "value=$value at ${Instant.EPOCH}"
+===

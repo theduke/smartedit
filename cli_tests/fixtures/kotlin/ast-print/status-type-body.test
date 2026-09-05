@@ -1,0 +1,6 @@
+> ast-print --type-bodies -S Status ./src/main.kt
+enum class Status {
+    NEW,
+    READY,
+}
+===
