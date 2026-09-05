@@ -1,0 +1,37 @@
+> ast-print --loc ./src/catalog.rs ./src/secondary.rs
+== src/catalog.rs ==
+[3-4] use std::fmt::{self, Display};
+[4-5] use std::collections::*;
+[6-8] const ANSWER
+[8-9] static COUNTER
+[10-14] struct Store
+[15-20] enum Choice
+[21-25] union Bits
+[26-27] type Handler
+[28-33] trait Render
+> [29-30] const NAME
+> [30-31] type Output
+> [31-32] fn render
+[34-43] impl Store<T>
+> [35-38] fn new
+> [39-42] fn push
+[44-52] impl Render for Store<T>
+> [45-46] const NAME
+> [46-47] type Output
+> [48-51] fn render
+[53-56] macro_rules! announce
+[57-60] extern "C"
+> [58-59] fn puts
+[61-72] mod nested
+> [62-64] struct Worker
+> [65-71] impl Worker
+>> [66-70] fn launch
+>>> [67-68] fn local
+== end src/catalog.rs ==
+
+== src/secondary.rs ==
+[0-4] fn companion
+[5-8] mod extras
+> [6-7] fn utility
+== end src/secondary.rs ==
+===

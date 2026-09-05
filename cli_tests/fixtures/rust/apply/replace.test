@@ -1,5 +1,0 @@
-> apply 'lr src/main.rs:0-1 "fn changed() {}\n"'
-Applied 1 modification(s) across 1 stage(s) in snapshot mode.
-=== src/main.rs
-fn changed() {}
-===

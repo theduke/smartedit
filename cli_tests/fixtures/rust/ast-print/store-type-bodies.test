@@ -1,0 +1,23 @@
+> ast-print --loc --signatures --type-bodies -S Store ./src/catalog.rs
+#[derive(Clone, Debug)]
+[10-14] pub struct Store<T> {
+            entries: Vec<T>,
+        }
+[34-43] impl<T> Store<T> {
+            pub fn new() -> Self {
+                Self { entries: Vec::new() }
+            }
+
+            pub fn push(&mut self, entry: T) {
+                self.entries.push(entry);
+            }
+        }
+[44-52] impl<T: Display> Render for Store<T> {
+            const NAME: &'static str = "store";
+            type Output = String;
+
+            fn render(&self) -> Self::Output {
+                format!("{} entries", self.entries.len())
+            }
+        }
+===

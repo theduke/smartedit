@@ -1,0 +1,12 @@
+> apply 'li src/patch.rs:2 "pub const VERSION: u8 = 1;\n"; ldm src/patch.rs r"^pub const TODO"'
+Applied 2 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rs
+pub const STATUS: &str = "draft";
+pub const VERSION: u8 = 1;
+
+pub fn greeting() -> &'static str {
+    "hello"
+}
+
+pub fn obsolete() {}
+===

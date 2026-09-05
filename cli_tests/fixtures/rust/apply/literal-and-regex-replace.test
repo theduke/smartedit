@@ -1,0 +1,12 @@
+> apply 'tr src/patch.rs "draft" "ready"; tr src/patch.rs r"obsolete" "retired"'
+Applied 2 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rs
+pub const STATUS: &str = "ready";
+pub const TODO: &str = "remove";
+
+pub fn greeting() -> &'static str {
+    "hello"
+}
+
+pub fn retired() {}
+===

@@ -1,0 +1,21 @@
+> apply 'lm src/secondary.rs:0-4 src/patch.rs:3'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/secondary.rs
+
+pub mod extras {
+    pub fn utility() {}
+}
+=== src/patch.rs
+pub const STATUS: &str = "draft";
+pub const TODO: &str = "remove";
+
+/// A companion function.
+pub fn companion(value: i32) -> i32 {
+    value + 1
+}
+pub fn greeting() -> &'static str {
+    "hello"
+}
+
+pub fn obsolete() {}
+===

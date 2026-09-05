@@ -1,3 +1,0 @@
-> ast-print --loc ./src/main.rs
-[0-1] fn main
-===
