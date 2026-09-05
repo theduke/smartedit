@@ -1,0 +1,7 @@
+> ast-print --loc --function-bodies -s 'service settings.*' ./src/quoted.toml
+[1-2] "display name" = "Fixture Service"
+[2-3] "api.version" = "v1"
+[4-7] table service settings.limits
+> [5-6] "max connections" = 64
+> [6-7] timeout = 30
+===

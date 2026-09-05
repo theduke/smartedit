@@ -1,0 +1,23 @@
+version = "1.2.3"
+release_channel = "beta"
+
+[package]
+name = "fixture-service"
+edition = "2021"
+authors = ["Ada", "Lin"]
+
+[server]
+host = "127.0.0.1"
+port = 8080
+
+[server.tls]
+enabled = true
+cert = "certs/service.pem"
+
+[[workers]]
+name = "indexer"
+threads = 4
+
+[[workers]]
+name = "notifier"
+threads = 2

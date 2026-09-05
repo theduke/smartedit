@@ -1,0 +1,20 @@
+> ast-print --loc ./src/config.toml
+[0-1] key version
+[1-2] key release_channel
+[3-8] table package
+> [4-5] key name
+> [5-6] key edition
+> [6-7] key authors
+[8-12] table server
+> [9-10] key host
+> [10-11] key port
+[12-16] table server.tls
+> [13-14] key enabled
+> [14-15] key cert
+[16-20] table workers
+> [17-18] key name
+> [18-19] key threads
+[20-23] table workers
+> [21-22] key name
+> [22-23] key threads
+===

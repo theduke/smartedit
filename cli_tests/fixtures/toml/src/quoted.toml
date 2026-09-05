@@ -1,0 +1,7 @@
+["service settings"]
+"display name" = "Fixture Service"
+"api.version" = "v1"
+
+["service settings".limits]
+"max connections" = 64
+timeout = 30

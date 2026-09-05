@@ -1,0 +1,8 @@
+> ast-print --type-bodies -S workers ./src/config.toml
+[[workers]]
+name = "indexer"
+threads = 4
+[[workers]]
+name = "notifier"
+threads = 2
+===

@@ -1,0 +1,28 @@
+> apply 'li src/config.toml:11 "protocol = \"http\"\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/config.toml
+version = "1.2.3"
+release_channel = "beta"
+
+[package]
+name = "fixture-service"
+edition = "2021"
+authors = ["Ada", "Lin"]
+
+[server]
+host = "127.0.0.1"
+port = 8080
+protocol = "http"
+
+[server.tls]
+enabled = true
+cert = "certs/service.pem"
+
+[[workers]]
+name = "indexer"
+threads = 4
+
+[[workers]]
+name = "notifier"
+threads = 2
+===
