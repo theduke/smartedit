@@ -1,0 +1,22 @@
+> ast-print --type-bodies -S User ./src/domain.php
+final class User extends Entity
+{
+    public function __construct(
+        int $id,
+        public string $name,
+        public Status $status = Status::Draft,
+    ) {
+        parent::__construct($id);
+    }
+
+    public function label(): string
+    {
+        return "{$this->id}: {$this->name}";
+    }
+
+    public function persist(): bool
+    {
+        return $this->status === Status::Active;
+    }
+}
+===

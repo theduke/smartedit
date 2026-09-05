@@ -1,0 +1,3 @@
+> ast-print --function-bodies -s Entity.persist ./src/domain.php
+abstract public function persist(): bool;
+===

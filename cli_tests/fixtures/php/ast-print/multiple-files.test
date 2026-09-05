@@ -1,0 +1,20 @@
+> ast-print --loc './src/*.php'
+== src/domain.php ==
+[6-10] interface Persistable
+> [8-9] function/method persist
+[12-21] class/trait HasTimestamps
+> [16-20] function/method touch
+[22-27] enum Status
+[28-38] class/trait Entity
+> [32-35] function/method __construct
+> [36-37] function/method persist
+[39-59] class/trait User
+> [41-48] function/method __construct
+> [49-53] function/method label
+> [54-58] function/method persist
+== end src/domain.php ==
+
+== src/functions.php ==
+[6-10] function/method make_user
+== end src/functions.php ==
+===

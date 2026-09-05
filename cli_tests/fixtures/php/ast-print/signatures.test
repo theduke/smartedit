@@ -1,0 +1,18 @@
+> ast-print --signatures ./src/domain.php
+interface Persistable
+> public function persist(): bool;
+trait HasTimestamps
+> public function touch(): void
+enum Status: string
+abstract class Entity implements Persistable
+> public function __construct(protected readonly int $id)
+> abstract public function persist(): bool;
+final class User extends Entity
+> public function __construct(
+>     int $id,
+>     public string $name,
+>     public Status $status = Status::Draft,
+> )
+> public function label(): string
+> public function persist(): bool
+===
