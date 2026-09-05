@@ -1,0 +1,12 @@
+> apply 'tr src/patch.scala "Legacy" "Modern"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.scala
+package fixtures.scala
+
+object Modern {
+  val status = "draft"
+  val compatibility = true
+
+  def message(name: String): String = s"hello, $name"
+}
+===

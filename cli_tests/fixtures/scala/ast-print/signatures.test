@@ -1,0 +1,14 @@
+> ast-print --signatures --loc ./src/main.scala
+[2-7] trait Repository[A]
+> [3-4] def current(id: String): Option[A]
+> [5-6] def label(value: A): String =
+[8-21] class Service[T](private val repository: Repository[T])
+> [9-12] def run(id: String): String =
+> [13-20] object Defaults
+>> [14-15] def label(value: String): String =
+>> [16-19] def create(): Service[String] =
+>>> [17-18] def current(id: String): Option[String] =
+[22-25] object Service
+> [23-24] def create(): Service[String] =
+[26-27] def topLevel(value: Int): String =
+===

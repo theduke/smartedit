@@ -1,0 +1,11 @@
+> apply 'ld src/patch.scala:4-5'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.scala
+package fixtures.scala
+
+object Legacy {
+  val status = "draft"
+
+  def message(name: String): String = s"hello, $name"
+}
+===

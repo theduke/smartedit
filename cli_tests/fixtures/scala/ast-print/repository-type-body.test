@@ -1,0 +1,7 @@
+> ast-print --type-bodies --loc --type-select Repository ./src/main.scala
+[2-7] trait Repository[A] {
+        def current(id: String): Option[A]
+
+        def label(value: A): String = s"repo:$value"
+      }
+===

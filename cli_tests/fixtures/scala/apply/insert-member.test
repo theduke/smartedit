@@ -1,0 +1,13 @@
+> apply 'li src/patch.scala:4 "  val owner = \"cli\"\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.scala
+package fixtures.scala
+
+object Legacy {
+  val status = "draft"
+  val owner = "cli"
+  val compatibility = true
+
+  def message(name: String): String = s"hello, $name"
+}
+===
