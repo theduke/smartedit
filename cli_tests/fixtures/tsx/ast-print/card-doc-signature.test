@@ -1,0 +1,4 @@
+> ast-print --loc --doc --signatures -s Card ./src/components.tsx
+/** Render a titled card. */
+[7-10] export function Card({ title, children }: CardProps)
+===

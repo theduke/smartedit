@@ -1,0 +1,9 @@
+> ast-print --loc --type-bodies -S Panel ./src/components.tsx
+[11-18] export class Panel extends React.Component<{ open: boolean }> {
+          close = () => <button onClick={this.props.onClose}>Close</button>;
+
+          render() {
+            return this.props.open ? <section>Open</section> : null;
+          }
+        }
+===
