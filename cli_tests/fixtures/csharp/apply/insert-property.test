@@ -1,0 +1,36 @@
+> apply 'li src/Program.cs:20 "    public bool IsEnabled { get; set; } = true;\n\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/Program.cs
+namespace Fixtures.Greetings;
+
+public interface IMessageWriter
+{
+    void Write(string message);
+}
+
+public enum GreetingStyle
+{
+    Formal,
+    Casual,
+}
+
+public readonly record struct Greeting(string Text, GreetingStyle Style);
+
+public class Greeter<TWriter> where TWriter : IMessageWriter, new()
+{
+    private readonly TWriter writer = new();
+
+    public string Prefix { get; init; } = "Hello";
+    public bool IsEnabled { get; set; } = true;
+
+
+    public Greeting Greet(string name, GreetingStyle style = GreetingStyle.Formal)
+    {
+        var text = $"{Prefix}, {name}!";
+        writer.Write(text);
+        return new Greeting(text, style);
+    }
+
+    public record Result(Greeting Greeting, bool Delivered);
+}
+===

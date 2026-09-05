@@ -1,0 +1,10 @@
+> ast-print --loc ./src/Program.cs
+[0-30] namespace Fixtures.Greetings
+> [2-6] interface IMessageWriter
+>> [4-5] method Write
+> [7-12] enum GreetingStyle
+> [13-14] class/struct Greeting
+> [15-30] class/struct Greeter
+>> [21-27] method Greet
+>> [28-29] class/struct Result
+===

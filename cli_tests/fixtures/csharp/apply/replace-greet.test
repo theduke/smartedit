@@ -1,0 +1,33 @@
+> apply 'lr src/Program.cs:21-27 "    public Greeting Greet(string name, GreetingStyle style = GreetingStyle.Casual) {\n        var text = $\"{Prefix}, {name}!\";\n        writer.Write(text);\n        return new Greeting(text, style);\n    }\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/Program.cs
+namespace Fixtures.Greetings;
+
+public interface IMessageWriter
+{
+    void Write(string message);
+}
+
+public enum GreetingStyle
+{
+    Formal,
+    Casual,
+}
+
+public readonly record struct Greeting(string Text, GreetingStyle Style);
+
+public class Greeter<TWriter> where TWriter : IMessageWriter, new()
+{
+    private readonly TWriter writer = new();
+
+    public string Prefix { get; init; } = "Hello";
+
+    public Greeting Greet(string name, GreetingStyle style = GreetingStyle.Casual) {
+        var text = $"{Prefix}, {name}!";
+        writer.Write(text);
+        return new Greeting(text, style);
+    }
+
+    public record Result(Greeting Greeting, bool Delivered);
+}
+===

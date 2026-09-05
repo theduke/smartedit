@@ -1,0 +1,17 @@
+> ast-print --type-bodies --type-select 'Fixtures.Legacy.Counter' ./src/Legacy.cs
+public struct Counter
+{
+    public int Value;
+
+    public void Increment()
+    {
+        Value++;
+    }
+
+    public int Add(int amount)
+    {
+        Value += amount;
+        return Value;
+    }
+}
+===

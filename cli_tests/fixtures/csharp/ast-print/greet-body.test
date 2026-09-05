@@ -1,0 +1,8 @@
+> ast-print --function-bodies --select 'Fixtures.Greetings.Greeter.Greet' ./src/Program.cs
+public Greeting Greet(string name, GreetingStyle style = GreetingStyle.Formal)
+{
+    var text = $"{Prefix}, {name}!";
+    writer.Write(text);
+    return new Greeting(text, style);
+}
+===
