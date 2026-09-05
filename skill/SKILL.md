@@ -1,6 +1,6 @@
 ---
 name: smartedit
-description: Prefer `smartedit ast-print` for Rust, Python, JavaScript, TypeScript, or Go exploration and `smartedit apply` for compact edits when working in this repo for token-efficient inspection/modification. Use to inspect outlines, signatures, doc comments/docstrings, item subtrees, type/function bodies, and to apply inline edit programs instead of rewriting whole files, with smarter more token-efficient editing commands.
+description: Prefer `smartedit ast-print` for exploring Rust, Python, JS/TS, Go, Java, C/C++, C#, Ruby, PHP, and configuration files, and `smartedit apply` for compact edits when working in this repo for token-efficient inspection/modification. Use to inspect outlines, signatures, doc comments/docstrings, item subtrees, type/function bodies, and to apply inline edit programs instead of rewriting whole files, with smarter more token-efficient editing commands.
 ---
 
 # Smartedit First
@@ -10,14 +10,14 @@ description: Prefer `smartedit ast-print` for Rust, Python, JavaScript, TypeScri
 - Do not spend much time choosing tools.
 - If `smartedit` can plausibly do the job, try it first.
 - Prefer `smartedit` CLI subcommands over generic reads/writes when they fit.
-- Prefer `smartedit ast-print` before reading whole Rust, Python, JavaScript, TypeScript, or Go files.
+- Prefer `smartedit ast-print` before reading whole source files in any of its 19 supported languages.
 - Prefer `smartedit apply` with inline args before writing full-file patches.
 - Try `smartedit` once, then fall back if it is unsupported, awkward, or less clear.
 
 ## `smartedit ast-print`
 
 - Subcommand: `smartedit ast-print [options] <path-or-glob>...`
-- Supported languages: Rust, Python, JavaScript (including JSX), TypeScript (including TSX), and Go.
+- Supported languages: Rust, Python, JavaScript/JSX, TypeScript/TSX, Go, Java, Kotlin, Scala, Lua, C, C++, C#, Ruby, PHP, Bash, JSON, YAML, and TOML.
 - Use for: outlines, signatures, doc comments/docstrings, type bodies, function bodies, locations, nested item selection, type inspection, multi-file/glob scans.
 - Default to `--loc` when the result may drive an edit.
 - `--loc` is the most important exploration flag for editing: it prints zero-based, half-open line ranges that use the same coordinates as `smartedit apply`.
