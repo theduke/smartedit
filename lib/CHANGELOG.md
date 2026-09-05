@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.0.2](https://github.com/theduke/smartedit/compare/smartedit-v0.0.1...smartedit-v0.0.2) - 2026-09-05
+
+### Added
+
+- Add additional languages
+- Add Go (golang) support
+
+### Fixed
+
+- harden editing and language analysis
+- Fix some panics for Rust code
+
+### Other
+
+- Fix clippy lints
+- Some fixes and more tests
+- Update docs
+- Add tests
+- Add more parsers
+- README tweaks
+- Improve README
+- Add stub changelogs
+
 ### Breaking API changes
 
 - `AstLocationRange` uses zero-based, half-open line coordinates and adds
