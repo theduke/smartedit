@@ -1,0 +1,18 @@
+> ast-print --loc ./src/main.cpp
+[2-35 shared-line] namespace math
+> [4-14] class/struct Box
+>> [7-8] function Box
+>> [8-9] function get
+>> [9-10] function set
+>> [12-13] variable value_
+> [15-20] class/struct Shape
+>> [17-18] function area
+>> [18-19] variable callback
+> [21-22] enum Color
+>> [21-22 shared-line] variant Red
+>> [21-22 shared-line] variant Green
+>> [21-22 shared-line] variant Blue
+> [23-24] type StringBox
+> [25-29] function identity
+> [30-33] function add
+===

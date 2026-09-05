@@ -1,0 +1,16 @@
+> apply 'li src/operators.cpp:3 "    operator int() const;\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/operators.cpp
+class Flag {
+public:
+    operator bool() const;
+    operator int() const;
+    Flag& operator=(const Flag& other);
+};
+
+using Predicate = bool (*)(int);
+
+bool (*choose())(int) {
+    return nullptr;
+}
+===

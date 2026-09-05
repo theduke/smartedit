@@ -1,0 +1,12 @@
+> ast-print --loc --type-bodies --type-select math.Box ./src/main.cpp
+[4-14] template <typename T>
+       class Box {
+       public:
+           explicit Box(T value);
+           T get() const;
+           void set(T value);
+
+       private:
+           T value_;
+       };
+===

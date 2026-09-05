@@ -1,0 +1,3 @@
+> ast-print --loc --function-bodies --select Flag.operator= ./src/operators.cpp
+[3-4] Flag& operator=(const Flag& other);
+===

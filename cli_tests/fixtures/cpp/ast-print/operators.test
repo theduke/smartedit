@@ -1,0 +1,7 @@
+> ast-print --signatures --loc ./src/operators.cpp
+[0-5] class Flag
+> [2-3] operator bool() const;
+> [3-4] Flag& operator=(const Flag& other);
+[6-7] using Predicate = bool (*)(int);
+[8-11] bool (*choose())(int)
+===

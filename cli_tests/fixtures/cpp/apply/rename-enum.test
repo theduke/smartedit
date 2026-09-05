@@ -1,0 +1,39 @@
+> apply 'tr src/main.cpp "Color" "Palette"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/main.cpp
+#include <string>
+
+namespace math {
+
+template <typename T>
+class Box {
+public:
+    explicit Box(T value);
+    T get() const;
+    void set(T value);
+
+private:
+    T value_;
+};
+
+class Shape {
+public:
+    virtual double area() const = 0;
+    void (*callback)(int);
+};
+
+enum class Palette { Red, Green, Blue };
+
+using StringBox = Box<std::string>;
+
+template <typename T>
+T identity(T value) {
+    return value;
+}
+
+int add(int left, int right) {
+    return left + right;
+}
+
+} // namespace math
+===
