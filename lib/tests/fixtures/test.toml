@@ -1,0 +1,6 @@
+[package]
+name = "smartedit"
+version = "1.0.0"
+
+[dependencies]
+foo = "1.0"

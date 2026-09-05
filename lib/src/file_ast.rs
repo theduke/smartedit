@@ -7,31 +7,49 @@ use crate::error::{Result, SmartEditError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AstLanguage {
-    Rust,
-    Python,
-    JavaScript,
-    TypeScript,
-    Tsx,
+    Bash,
+    C,
+    Cpp,
+    CSharp,
     Go,
-    Scala,
     Java,
+    JavaScript,
+    Json,
     Kotlin,
     Lua,
+    Php,
+    Python,
+    Ruby,
+    Rust,
+    Scala,
+    Toml,
+    Tsx,
+    TypeScript,
+    Yaml,
 }
 
 impl AstLanguage {
     pub fn from_path(path: &Path) -> Option<Self> {
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some("rs") => Some(Self::Rust),
-            Some("py" | "pyi") => Some(Self::Python),
-            Some("js") | Some("mjs") | Some("cjs") | Some("jsx") => Some(Self::JavaScript),
-            Some("ts") | Some("mts") | Some("cts") => Some(Self::TypeScript),
-            Some("tsx") => Some(Self::Tsx),
-            Some("go") => Some(Self::Go),
-            Some("scala" | "sc") => Some(Self::Scala),
-            Some("java") => Some(Self::Java),
-            Some("kt" | "kts") => Some(Self::Kotlin),
-            Some("lua") => Some(Self::Lua),
+        match path.extension()?.to_str()? {
+            "c" | "h" => Some(Self::C),
+            "cpp" | "cxx" | "cc" | "hpp" | "hxx" => Some(Self::Cpp),
+            "cs" => Some(Self::CSharp),
+            "go" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "js" | "mjs" | "cjs" | "jsx" => Some(Self::JavaScript),
+            "json" => Some(Self::Json),
+            "kt" | "kts" => Some(Self::Kotlin),
+            "lua" => Some(Self::Lua),
+            "php" => Some(Self::Php),
+            "py" | "pyi" => Some(Self::Python),
+            "rb" => Some(Self::Ruby),
+            "rs" => Some(Self::Rust),
+            "scala" | "sc" => Some(Self::Scala),
+            "sh" | "bash" => Some(Self::Bash),
+            "toml" => Some(Self::Toml),
+            "ts" | "mts" | "cts" => Some(Self::TypeScript),
+            "tsx" => Some(Self::Tsx),
+            "yml" | "yaml" => Some(Self::Yaml),
             _ => None,
         }
     }
@@ -78,16 +96,70 @@ pub struct AstSyntaxErrorLocation {
 impl FileAst {
     pub fn parse(language: AstLanguage, source: &str) -> Result<Self> {
         match language {
-            AstLanguage::Rust => parse_rust_ast(source),
-            AstLanguage::Python => parse_python_ast(source),
+            AstLanguage::Bash => parse_generic_ast(
+                source,
+                AstLanguage::Bash,
+                tree_sitter_bash::LANGUAGE.into(),
+                parse_bash_item,
+            ),
+            AstLanguage::C => parse_generic_ast(
+                source,
+                AstLanguage::C,
+                tree_sitter_c::LANGUAGE.into(),
+                parse_c_item,
+            ),
+            AstLanguage::Cpp => parse_generic_ast(
+                source,
+                AstLanguage::Cpp,
+                tree_sitter_cpp::LANGUAGE.into(),
+                parse_cpp_item,
+            ),
+            AstLanguage::CSharp => parse_generic_ast(
+                source,
+                AstLanguage::CSharp,
+                tree_sitter_c_sharp::LANGUAGE.into(),
+                parse_csharp_item,
+            ),
+            AstLanguage::Go => parse_go_ast(source),
+            AstLanguage::Java => parse_java_ast(source),
             AstLanguage::JavaScript | AstLanguage::TypeScript | AstLanguage::Tsx => {
                 parse_js_like_ast(language, source)
             }
-            AstLanguage::Go => parse_go_ast(source),
-            AstLanguage::Scala => parse_scala_ast(source),
-            AstLanguage::Java => parse_java_ast(source),
+            AstLanguage::Json => parse_generic_ast(
+                source,
+                AstLanguage::Json,
+                tree_sitter_json::LANGUAGE.into(),
+                parse_json_item,
+            ),
             AstLanguage::Kotlin => parse_kotlin_ast(source),
             AstLanguage::Lua => parse_lua_ast(source),
+            AstLanguage::Php => parse_generic_ast(
+                source,
+                AstLanguage::Php,
+                tree_sitter_php::LANGUAGE_PHP.into(),
+                parse_php_item,
+            ),
+            AstLanguage::Python => parse_python_ast(source),
+            AstLanguage::Ruby => parse_generic_ast(
+                source,
+                AstLanguage::Ruby,
+                tree_sitter_ruby::LANGUAGE.into(),
+                parse_ruby_item,
+            ),
+            AstLanguage::Rust => parse_rust_ast(source),
+            AstLanguage::Scala => parse_scala_ast(source),
+            AstLanguage::Toml => parse_generic_ast(
+                source,
+                AstLanguage::Toml,
+                tree_sitter_toml_ng::LANGUAGE.into(),
+                parse_toml_item,
+            ),
+            AstLanguage::Yaml => parse_generic_ast(
+                source,
+                AstLanguage::Yaml,
+                tree_sitter_yaml::LANGUAGE.into(),
+                parse_yaml_item,
+            ),
         }
     }
 
@@ -481,13 +553,22 @@ fn parse_js_like_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
             "tsx",
             JsLikeFlavor::TypeScript,
         ),
-        AstLanguage::Rust
-        | AstLanguage::Python
+        AstLanguage::Bash
+        | AstLanguage::C
+        | AstLanguage::Cpp
+        | AstLanguage::CSharp
         | AstLanguage::Go
-        | AstLanguage::Scala
         | AstLanguage::Java
+        | AstLanguage::Json
         | AstLanguage::Kotlin
-        | AstLanguage::Lua => unreachable!(),
+        | AstLanguage::Lua
+        | AstLanguage::Php
+        | AstLanguage::Python
+        | AstLanguage::Ruby
+        | AstLanguage::Rust
+        | AstLanguage::Scala
+        | AstLanguage::Toml
+        | AstLanguage::Yaml => unreachable!(),
     };
     parser
         .set_language(&tree_sitter_language)
@@ -6127,5 +6208,310 @@ fn parse_lua_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         signature: Some(trimmed_node_text(node, source)),
         body: None,
         children: Vec::new(),
+    })
+}
+fn parse_generic_ast(
+    source: &str,
+    ast_language: AstLanguage,
+    tree_sitter_language: tree_sitter::Language,
+    parse_item: fn(Node<'_>, &str) -> Option<AstItem>,
+) -> Result<FileAst> {
+    let mut parser = Parser::new();
+    let lang_name = format!("{:?}", ast_language).to_lowercase();
+    parser
+        .set_language(&tree_sitter_language)
+        .map_err(|message| SmartEditError::AstParseSetupFailed {
+            language: Box::leak(lang_name.clone().into_boxed_str()),
+            message: message.to_string(),
+        })?;
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| SmartEditError::AstParseFailed {
+            language: Box::leak(lang_name.clone().into_boxed_str()),
+            message: "tree-sitter returned no parse tree".to_owned(),
+        })?;
+    let root = tree.root_node();
+    let mut items = collect_generic_items(root, source, parse_item);
+    mark_overlapping_sibling_locations(&mut items);
+
+    Ok(FileAst {
+        language: ast_language,
+        root_docs: None,
+        items,
+        has_errors: root.has_error(),
+        first_error: first_syntax_error(root),
+    })
+}
+
+fn parse_c_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "struct_specifier" => (AstItemKind::Class, "struct"),
+        "enum_specifier" => (AstItemKind::Enum, "enum"),
+        "function_definition" | "declaration" => (AstItemKind::Function, "function"),
+        _ => return None,
+    };
+
+    // Attempt to find name in different variations
+    let name = child_text_by_field(node, "declarator", source)
+        .or_else(|| child_text_by_field(node, "name", source))
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_c_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_cpp_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class_specifier" | "struct_specifier" => (AstItemKind::Class, "class/struct"),
+        "enum_specifier" => (AstItemKind::Enum, "enum"),
+        "function_definition" | "declaration" => (AstItemKind::Function, "function"),
+        _ => return None,
+    };
+
+    let name = child_text_by_field(node, "declarator", source)
+        .or_else(|| child_text_by_field(node, "name", source))
+        .unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_cpp_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_csharp_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class_declaration" | "record_declaration" | "struct_declaration" => {
+            (AstItemKind::Class, "class/struct")
+        }
+        "interface_declaration" => (AstItemKind::Interface, "interface"),
+        "enum_declaration" => (AstItemKind::Enum, "enum"),
+        "method_declaration" | "constructor_declaration" => (AstItemKind::Function, "method"),
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_csharp_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_ruby_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class" | "singleton_class" => (AstItemKind::Class, "class"),
+        "module" => (AstItemKind::Interface, "module"),
+        "method" | "singleton_method" => (AstItemKind::Function, "def"),
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_ruby_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_php_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "class_declaration" | "trait_declaration" => (AstItemKind::Class, "class/trait"),
+        "interface_declaration" => (AstItemKind::Interface, "interface"),
+        "enum_declaration" => (AstItemKind::Enum, "enum"),
+        "method_declaration" | "function_definition" => (AstItemKind::Function, "function/method"),
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_php_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_bash_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "function_definition" => (AstItemKind::Function, "function"),
+        _ => return None,
+    };
+
+    let name =
+        child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("body");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(signature_text_with_body(node, body, source)),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_bash_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_json_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    // JSON just has objects and arrays. Let's extract top level keys if they are objects.
+    let (kind, kind_str) = match node.kind() {
+        "pair" => (AstItemKind::Function, "key"), // treating pair as a block
+        _ => return None,
+    };
+
+    let name = child_text_by_field(node, "key", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("value");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(name),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_json_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_yaml_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "block_mapping_pair" => (AstItemKind::Function, "key"),
+        _ => return None,
+    };
+
+    let name = child_text_by_field(node, "key", source).unwrap_or_else(|| "<anonymous>".to_owned());
+    let body = node.child_by_field_name("value");
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(name),
+        body: body.map(|b| trimmed_node_text(b, source)),
+        children: body
+            .map(|b| collect_generic_items(b, source, parse_yaml_item))
+            .unwrap_or_default(),
+    })
+}
+
+fn parse_toml_item(node: Node<'_>, source: &str) -> Option<AstItem> {
+    let (kind, kind_str) = match node.kind() {
+        "table" | "table_array_element" => (AstItemKind::Class, "table"),
+        "pair" => (AstItemKind::Function, "key"),
+        _ => return None,
+    };
+
+    let name = {
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .find(|c| c.kind() == "key" || c.kind() == "dotted_key" || c.kind() == "bare_key")
+            .map(|c| trimmed_node_text(c, source))
+            .unwrap_or_else(|| "<anonymous>".to_owned())
+    };
+
+    // In TOML table contents aren't nested syntactically under the table node usually (it's flat), but let's do our best.
+
+    Some(AstItem {
+        kind,
+        name: Some(name.clone()),
+        associated_type: None,
+        location: location_for_node(node, source),
+        docs: None,
+        inner_docs: None,
+        attributes: None,
+        source_preamble: None,
+        summary: format!("{} {}", kind_str, name),
+        signature: Some(name),
+        body: None,
+        children: collect_generic_items(node, source, parse_toml_item),
     })
 }

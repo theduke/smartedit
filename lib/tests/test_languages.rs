@@ -129,3 +129,112 @@ fn test_tsx_ast_parsing() {
     assert!(rendered.contains("interface MyProps"));
     assert!(rendered.contains("function MyComponent"));
 }
+
+#[test]
+fn test_c_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.c").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.c"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("struct MyStruct"));
+    assert!(rendered.contains("enum MyEnum"));
+    assert!(rendered.contains("function my_function"));
+}
+
+#[test]
+fn test_cpp_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.cpp").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.cpp"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("class/struct MyClass"));
+    assert!(rendered.contains("enum MyEnum"));
+    assert!(rendered.contains("function my_function"));
+}
+
+#[test]
+fn test_csharp_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.cs").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.cs"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("class/struct MyClass"));
+    assert!(rendered.contains("method myMethod"));
+    assert!(rendered.contains("interface MyInterface"));
+    assert!(rendered.contains("method doSomething"));
+    assert!(rendered.contains("enum MyEnum"));
+    assert!(rendered.contains("class/struct MyRecord"));
+}
+
+#[test]
+fn test_ruby_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.rb").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.rb"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("module MyModule"));
+    assert!(rendered.contains("class MyClass"));
+    assert!(rendered.contains("def my_method"));
+    assert!(rendered.contains("def class_method"));
+}
+
+#[test]
+fn test_php_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.php").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.php"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+    println!("PHP:\n{}", rendered);
+    assert!(rendered.contains("class/trait MyClass"));
+    assert!(rendered.contains("function/method myMethod"));
+    assert!(rendered.contains("interface MyInterface"));
+    assert!(rendered.contains("function/method doSomething"));
+    assert!(rendered.contains("class/trait MyTrait"));
+    assert!(rendered.contains("function/method myTraitMethod"));
+    assert!(rendered.contains("enum MyEnum"));
+    assert!(rendered.contains("function/method topLevelFunction"));
+}
+
+#[test]
+fn test_bash_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.sh").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.sh"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("function my_function"));
+    assert!(rendered.contains("function my_other_function"));
+}
+
+#[test]
+fn test_json_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.json").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.json"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("key \"name\""));
+    assert!(rendered.contains("key \"version\""));
+    assert!(rendered.contains("key \"dependencies\""));
+}
+
+#[test]
+fn test_yaml_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.yaml").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.yaml"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+
+    assert!(rendered.contains("key name"));
+    assert!(rendered.contains("key version"));
+    assert!(rendered.contains("key dependencies"));
+}
+
+#[test]
+fn test_toml_ast_parsing() {
+    let source = fs::read_to_string("tests/fixtures/test.toml").unwrap();
+    let ast = parse_file_ast(Path::new("tests/fixtures/test.toml"), &source).unwrap();
+    let rendered = ast.render(AstRenderOptions::default());
+    println!("TOML:\n{}", rendered);
+    assert!(rendered.contains("table package"));
+    assert!(rendered.contains("key name"));
+    assert!(rendered.contains("key version"));
+    assert!(rendered.contains("table dependencies"));
+    assert!(rendered.contains("key foo"));
+}
