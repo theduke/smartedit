@@ -4,28 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
-### Breaking API changes
+## [0.0.2](https://github.com/theduke/smartedit/compare/smartedit-v0.0.1...smartedit-v0.0.2) - 2026-09-05
 
-- `AstLocationRange` uses zero-based, half-open line coordinates and adds
-  `is_edit_ready` to distinguish safe whole-line edit ranges.
-- `FileAst` adds `first_error`, and the new `AstSyntaxErrorLocation` reports the first
-  recovery node using zero-based line and byte-column coordinates.
-- `AstItem` adds `inner_docs`, `attributes`, and `source_preamble`; `AstItemKind` adds
-  variants for newly represented source constructs.
-- The misleading `ExecutionMode` API was removed. `ExecutionOptions` now contains only
-  execution controls; snapshot versus incremental evaluation is selected with
-  `ProgramMode`.
-- `PlannedAction::WriteFile` carries overwrite intent and `PlannedAction::MoveFile` is
-  a first-class action.
-- `FileSystem` implementations must support exclusive file creation and metadata-aware
-  file moves.
+### Added
 
-These changes require a version bump before publication. Downstream code constructing
-public structs or exhaustively matching public enums will need corresponding updates.
+- Add additional languages (bash, c, cpp, csharp, go, java, json, kotlin, lua, php, ruby, rust, scala, toml, yaml
 
 ### Fixed
 
-- Path identity, snapshot merging, destructive-overlap validation, target-topology
-  checks, CRLF matching, and move semantics now preserve documented edit behavior.
-- AST parsing and selection cover the audited Rust, Python, JavaScript, TypeScript, TSX,
-  and Go constructs while retaining recovery metadata for malformed source.
+- harden editing and language analysis
+- Fix some panics for Rust code
+
+### Other
+
+- Fix clippy lints
+- Some fixes and more tests
+- Update docs
+- Add tests
+- Add more parsers
+- README tweaks
+- Improve README
+- Add stub changelogs
+- metadata for malformed source.

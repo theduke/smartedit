@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.0.2](https://github.com/theduke/smartedit/compare/smartedit-cli-v0.0.1...smartedit-cli-v0.0.2) - 2026-09-05
+
+### Added
+
+- Add additional languages
+- Add Go (golang) support
+
+### Fixed
+
+- harden editing and language analysis
+
+### Other
+
+- Add fixture tests for all languages
+- Update docs
+- Add more parsers
+- README tweaks
+- *(build)* Use --force in 'just install' command
+- Improve README
+- Add stub changelogs
+
 ### Changed
 
 - `ast-print --loc` now reports zero-based, half-open whole-line ranges. Ranges whose
