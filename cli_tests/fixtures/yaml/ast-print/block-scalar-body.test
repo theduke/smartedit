@@ -1,0 +1,5 @@
+> ast-print --function-bodies -s message ./src/config.yaml
+message: |
+welcome to the fixture
+with multiple lines
+===

@@ -1,0 +1,10 @@
+> ast-print --loc --function-bodies -s 'workers.*' ./src/config.yaml
+[6-7 shared-line] name: indexer
+[7-10] settings:
+             threads: 4
+             queue: fast
+[10-11 shared-line] name: notifier
+[11-14] settings:
+              threads: 2
+              queue: reliable
+===

@@ -1,0 +1,4 @@
+> ast-print --loc --function-bodies -s jobs.test.strategy.matrix ./src/workflow.yml
+[6-8] matrix:
+              rust: [stable, beta]
+===

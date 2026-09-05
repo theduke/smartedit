@@ -1,0 +1,22 @@
+> apply 'li src/config.yaml:3 "  region: eu-west-1\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/config.yaml
+version: 1.2.3
+service:
+  name: fixture-service
+  region: eu-west-1
+  enabled: true
+  tags: [api, stable]
+workers:
+  - name: indexer
+    settings:
+      threads: 4
+      queue: fast
+  - name: notifier
+    settings:
+      threads: 2
+      queue: reliable
+message: |
+  welcome to the fixture
+  with multiple lines
+===

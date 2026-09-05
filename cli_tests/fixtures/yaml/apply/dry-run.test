@@ -1,0 +1,20 @@
+> apply --dry-run 'tr src/advanced.yaml r"(prod)\.example\.test" "$1.internal"'
+Dry run
+Mode: snapshot
+Stages: 1
+Modifications: 1
+Actions: 1
+
+Stage 1
+  Modification 1: 1 action(s)
+  - write file `src/advanced.yaml` (144 bytes)
+=== src/advanced.yaml
+defaults: &defaults
+  timeout: 30
+  retries: 2
+production:
+  <<: *defaults
+  host: prod.example.test
+"quoted key":
+  value: "contains: punctuation"
+===

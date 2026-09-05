@@ -1,0 +1,44 @@
+> ast-print --signatures './src/*.{yaml,yml}'
+== src/advanced.yaml ==
+defaults
+> timeout
+> retries
+production
+> <<
+> host
+"quoted key"
+> value
+== end src/advanced.yaml ==
+
+== src/config.yaml ==
+version
+service
+> name
+> enabled
+> tags
+workers
+> name
+> settings
+>> threads
+>> queue
+> name
+> settings
+>> threads
+>> queue
+message
+== end src/config.yaml ==
+
+== src/workflow.yml ==
+name
+on
+jobs
+> test
+>> runs-on
+>> strategy
+>>> matrix
+>>>> rust
+>> steps
+>>> uses
+>>> run
+== end src/workflow.yml ==
+===

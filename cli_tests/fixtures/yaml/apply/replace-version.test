@@ -1,0 +1,21 @@
+> apply 'tr src/config.yaml "1.2.3" "1.3.0"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/config.yaml
+version: 1.3.0
+service:
+  name: fixture-service
+  enabled: true
+  tags: [api, stable]
+workers:
+  - name: indexer
+    settings:
+      threads: 4
+      queue: fast
+  - name: notifier
+    settings:
+      threads: 2
+      queue: reliable
+message: |
+  welcome to the fixture
+  with multiple lines
+===
