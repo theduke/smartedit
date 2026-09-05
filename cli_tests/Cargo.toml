@@ -1,0 +1,14 @@
+[package]
+name = "cli-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dev-dependencies]
+libtest-mimic = "0.8"
+shell-words = "1.1"
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+harness = false
