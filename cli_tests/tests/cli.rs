@@ -85,7 +85,7 @@ fn main() {
     let binary = build_smartedit().unwrap_or_else(|error| panic!("{error}"));
     let fixtures = discover_fixture_tests().unwrap_or_else(|error| panic!("{error}"));
 
-    let tests = fixtures
+    let mut tests: Vec<_> = fixtures
         .into_iter()
         .map(|fixture| {
             let binary = binary.clone();
@@ -94,6 +94,9 @@ fn main() {
             })
         })
         .collect();
+    tests.push(Trial::test("harness/normalizes-crlf-sources", || {
+        verify_crlf_source_normalization().map_err(Failed::from)
+    }));
 
     libtest_mimic::run(&args, tests).exit();
 }
@@ -303,6 +306,7 @@ fn run_fixture_test(binary: &Path, fixture: &FixtureTest) -> Result<(), String> 
     let spec = parse_spec(&fixture.spec_path)?;
     let temp = TempDir::new(&fixture.name)?;
     copy_dir(&fixture.language_dir, temp.path())?;
+    normalize_fixture_sources(&temp.path().join("src"))?;
 
     let output = Command::new(binary)
         .args(&spec.command)
@@ -475,6 +479,63 @@ fn joined_fixture_lines(lines: &[&str]) -> String {
 
 fn normalize_newlines(value: &str) -> String {
     value.replace("\r\n", "\n")
+}
+
+fn normalize_fixture_sources(path: &Path) -> Result<(), String> {
+    for entry in
+        fs::read_dir(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?
+    {
+        let entry = entry.map_err(|error| format!("failed to read directory entry: {error}"))?;
+        let entry_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("failed to inspect {}: {error}", entry_path.display()))?;
+
+        if file_type.is_dir() {
+            normalize_fixture_sources(&entry_path)?;
+        } else if file_type.is_file() {
+            let bytes = fs::read(&entry_path)
+                .map_err(|error| format!("failed to read {}: {error}", entry_path.display()))?;
+            if bytes.windows(2).any(|window| window == b"\r\n") {
+                let Ok(text) = String::from_utf8(bytes) else {
+                    continue;
+                };
+                fs::write(&entry_path, text.replace("\r\n", "\n")).map_err(|error| {
+                    format!("failed to normalize {}: {error}", entry_path.display())
+                })?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn verify_crlf_source_normalization() -> Result<(), String> {
+    let temp = TempDir::new("crlf-normalization")?;
+    let text_path = temp.path().join("source.txt");
+    let binary_path = temp.path().join("source.bin");
+    let binary = b"binary:\xff\r\n";
+
+    fs::write(&text_path, b"first\r\nsecond\r\n")
+        .map_err(|error| format!("failed to write {}: {error}", text_path.display()))?;
+    fs::write(&binary_path, binary)
+        .map_err(|error| format!("failed to write {}: {error}", binary_path.display()))?;
+
+    normalize_fixture_sources(temp.path())?;
+
+    let text = fs::read(&text_path)
+        .map_err(|error| format!("failed to read {}: {error}", text_path.display()))?;
+    if text != b"first\nsecond\n" {
+        return Err("CRLF fixture source was not normalized to LF".into());
+    }
+
+    let unchanged_binary = fs::read(&binary_path)
+        .map_err(|error| format!("failed to read {}: {error}", binary_path.display()))?;
+    if unchanged_binary != binary {
+        return Err("binary fixture source was modified during normalization".into());
+    }
+
+    Ok(())
 }
 
 fn copy_dir(source: &Path, destination: &Path) -> Result<(), String> {
