@@ -1,0 +1,6 @@
+> ast-print --loc --function-bodies -s 'api.nested' ./src/main.js
+[23-28 shared-line] object nested
+> [24-27 shared-line] *values() {
+>                       yield 1;
+>                     }
+===

@@ -1,0 +1,7 @@
+> ast-print --loc --function-bodies -s 'Worker.run' ./src/main.js
+[10-15] async run(job) {
+          const normalize = (value) => String(value).trim();
+          const callable = { call: (value) => normalize(value) };
+          return callable.call(job);
+        }
+===

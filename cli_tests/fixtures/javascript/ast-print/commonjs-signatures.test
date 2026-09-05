@@ -1,0 +1,7 @@
+> ast-print --loc --signatures ./src/plugin.cjs
+[0-1] const plugin =
+[2-5] plugin.install = function install(target)
+[6-7] plugin.run = (value) =>
+[8-11] plugin.Widget = function Widget(name)
+[12-15] plugin.Widget.prototype.render = function render()
+===

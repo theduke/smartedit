@@ -1,0 +1,17 @@
+> ast-print --loc --doc --signatures ./src/main.js
+/** A worker that runs normalized jobs. */
+[1-16] export class Worker
+> /** Create a worker. */
+> [5-8] constructor(name)
+> /** Run one job asynchronously. */
+> [10-15] async run(job)
+>> [11-12] const normalize = (value) =>
+>> [12-13] const callable =
+>>> [12-13 shared-line] call: (value) =>
+/** Public helpers. */
+[18-29] export const api =
+> [19-22 shared-line] greet(name)
+> [22-23 shared-line] twice: (value) =>
+> [23-28 shared-line] nested:
+>> [24-27 shared-line] *values()
+===

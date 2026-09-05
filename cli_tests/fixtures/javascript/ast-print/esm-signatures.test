@@ -1,0 +1,6 @@
+> ast-print --loc --signatures ./src/module.mjs
+[0-3] export async function load(url)
+[4-8] export function* sequence()
+[9-14] export default class
+> [10-13] static create()
+===

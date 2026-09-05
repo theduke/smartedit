@@ -1,0 +1,14 @@
+> apply 'ld src/module.mjs:4-8'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/module.mjs
+export async function load(url) {
+  return await fetch(url);
+}
+
+
+export default class {
+  static create() {
+    return new this();
+  }
+}
+===
