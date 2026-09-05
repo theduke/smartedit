@@ -1,0 +1,18 @@
+{
+  "env": {
+    "development": {
+      "debug": true,
+      "endpoint": "http://localhost:3000"
+    },
+    "production": {
+      "debug": false
+    }
+  },
+  "limits": {
+    "retries": 3,
+    "timeoutMs": 5000
+  },
+  "deprecated": {
+    "legacyMode": true
+  }
+}

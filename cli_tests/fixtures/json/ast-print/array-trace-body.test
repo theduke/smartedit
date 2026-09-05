@@ -1,0 +1,4 @@
+> ast-print --function-bodies -s '"features".*.*' ./src/package.json
+"trace": true
+"level": "verbose"
+===
