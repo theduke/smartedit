@@ -1,0 +1,6 @@
+> ast-print --loc --function-bodies -s 'nested.Worker.launch' ./src/catalog.rs
+[66-70] pub fn launch(&self) {
+            fn local() -> &'static str { "ready" }
+            announce!(local());
+        }
+===

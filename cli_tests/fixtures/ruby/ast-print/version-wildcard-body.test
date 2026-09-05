@@ -1,0 +1,5 @@
+> ast-print --function-bodies --select '*.version' ./src/main.rb
+def version
+  "1.0"
+end
+===

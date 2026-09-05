@@ -1,0 +1,5 @@
+> ast-print --function-bodies --loc --select 'Service.run' ./src/main.scala
+[9-12] def run(id: String): String = {
+         repository.current(id).map(repository.label).getOrElse("missing")
+       }
+===

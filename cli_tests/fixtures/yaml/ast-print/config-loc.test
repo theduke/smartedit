@@ -1,0 +1,17 @@
+> ast-print --loc ./src/config.yaml
+[0-1] key version
+[1-5] key service
+> [2-3] key name
+> [3-4] key enabled
+> [4-5] key tags
+[5-14] key workers
+> [6-7 shared-line] key name
+> [7-10] key settings
+>> [8-9] key threads
+>> [9-10] key queue
+> [10-11 shared-line] key name
+> [11-14] key settings
+>> [12-13] key threads
+>> [13-14] key queue
+[14-17] key message
+===

@@ -1,0 +1,24 @@
+/** Props accepted by a card. */
+export interface CardProps {
+  title: string;
+  children?: React.ReactNode;
+}
+
+/** Render a titled card. */
+export function Card({ title, children }: CardProps) {
+  return <article className="card"><h2>{title}</h2>{children}</article>;
+}
+
+export class Panel extends React.Component<{ open: boolean }> {
+  close = () => <button onClick={this.props.onClose}>Close</button>;
+
+  render() {
+    return this.props.open ? <section>Open</section> : null;
+  }
+}
+
+export const Badge = ({ label }: { label: string }) => (
+  <span className="badge">{label}</span>
+);
+
+export default <T,>({ value }: { value: T }) => <output>{String(value)}</output>;

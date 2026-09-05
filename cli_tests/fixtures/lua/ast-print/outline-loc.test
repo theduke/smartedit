@@ -1,0 +1,6 @@
+> ast-print --loc ./src/main.lua
+[3-7] function M.greet
+[8-15] function calculate
+> [9-12] function double
+[16-17] function M.empty
+===

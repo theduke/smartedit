@@ -1,0 +1,6 @@
+> ast-print --function-bodies -s User.persist ./src/domain.php
+public function persist(): bool
+{
+    return $this->status === Status::Active;
+}
+===

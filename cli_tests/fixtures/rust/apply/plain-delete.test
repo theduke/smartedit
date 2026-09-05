@@ -1,0 +1,11 @@
+> apply 'ld src/patch.rs:7-8'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rs
+pub const STATUS: &str = "draft";
+pub const TODO: &str = "remove";
+
+pub fn greeting() -> &'static str {
+    "hello"
+}
+
+===

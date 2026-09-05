@@ -1,0 +1,6 @@
+> ast-print --type-bodies -S package ./src/config.toml
+[package]
+name = "fixture-service"
+edition = "2021"
+authors = ["Ada", "Lin"]
+===

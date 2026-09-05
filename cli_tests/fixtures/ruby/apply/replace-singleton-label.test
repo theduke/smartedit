@@ -1,0 +1,33 @@
+> apply 'lr src/main.rb:14-17 "    def self.label\n      \"release\"\n    end\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/main.rb
+module Greetings
+  class Greeter
+    def initialize(name)
+      @name = name
+    end
+
+    def greet(punctuation = "!")
+      "Hello, #{@name}#{punctuation}"
+    end
+
+    def self.default
+      new("world")
+    end
+
+    def self.label
+      "release"
+    end
+
+    class << self
+      def version
+        "1.0"
+      end
+    end
+  end
+end
+
+def compatibility_label
+  Greetings::Greeter.default.greet
+end
+===

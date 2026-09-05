@@ -1,0 +1,13 @@
+> apply 'ld src/patch.rb:8-11'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rb
+class Release
+  DRAFT = "draft"
+
+  def label
+    DRAFT
+  end
+
+  # TODO: remove before release
+end
+===

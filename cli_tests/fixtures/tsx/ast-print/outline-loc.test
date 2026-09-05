@@ -1,0 +1,11 @@
+> ast-print --loc ./src/components.tsx
+[1-5] interface CardProps
+> [2-3] property title
+> [3-4] property children
+[7-10] function Card
+[11-18] class Panel
+> [12-13] method close
+> [14-17] method render
+[19-22] function Badge
+[23-24] function default
+===

@@ -1,0 +1,6 @@
+> ast-print --loc --function-bodies --select math.identity ./src/main.cpp
+[25-29] template <typename T>
+        T identity(T value) {
+            return value;
+        }
+===

@@ -1,0 +1,17 @@
+> ast-print --loc --type-bodies -S Worker ./src/main.js
+[1-16] export class Worker {
+         static version = "1.0";
+
+         /** Create a worker. */
+         constructor(name) {
+           this.name = name;
+         }
+
+         /** Run one job asynchronously. */
+         async run(job) {
+           const normalize = (value) => String(value).trim();
+           const callable = { call: (value) => normalize(value) };
+           return callable.call(job);
+         }
+       }
+===

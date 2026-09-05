@@ -1,0 +1,19 @@
+> apply 'li src/functions.php:10 "\nfunction active_status(): Status\n{\n    return Status::Active;\n}\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/functions.php
+<?php
+
+declare(strict_types=1);
+
+namespace Fixtures\Domain;
+
+function make_user(int $id, string $name): User
+{
+    return new User($id, $name);
+}
+
+function active_status(): Status
+{
+    return Status::Active;
+}
+===

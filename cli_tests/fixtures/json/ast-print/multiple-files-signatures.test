@@ -1,0 +1,38 @@
+> ast-print --signatures './src/*.json'
+== src/package.json ==
+"name"
+"version"
+"description"
+"private"
+"scripts"
+> "build"
+> "test"
+"dependencies"
+> "left-pad"
+"features"
+> "name"
+> "options"
+>> "trace"
+>> "level"
+"owners"
+> "primary"
+> "reviewers"
+"metadata"
+> "license"
+> "repository"
+== end src/package.json ==
+
+== src/settings.json ==
+"env"
+> "development"
+>> "debug"
+>> "endpoint"
+> "production"
+>> "debug"
+"limits"
+> "retries"
+> "timeoutMs"
+"deprecated"
+> "legacyMode"
+== end src/settings.json ==
+===

@@ -1,0 +1,3 @@
+> ast-print --function-bodies --loc --select 'Repository.current' ./src/main.scala
+[3-4] def current(id: String): Option[A]
+===

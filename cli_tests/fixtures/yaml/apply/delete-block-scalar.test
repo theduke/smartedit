@@ -1,0 +1,18 @@
+> apply 'ld src/config.yaml:14-17'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/config.yaml
+version: 1.2.3
+service:
+  name: fixture-service
+  enabled: true
+  tags: [api, stable]
+workers:
+  - name: indexer
+    settings:
+      threads: 4
+      queue: fast
+  - name: notifier
+    settings:
+      threads: 2
+      queue: reliable
+===

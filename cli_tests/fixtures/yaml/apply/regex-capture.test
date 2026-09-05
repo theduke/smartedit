@@ -1,0 +1,12 @@
+> apply 'tr src/advanced.yaml r"(prod)\.example\.test" "$1.internal"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/advanced.yaml
+defaults: &defaults
+  timeout: 30
+  retries: 2
+production:
+  <<: *defaults
+  host: prod.internal
+"quoted key":
+  value: "contains: punctuation"
+===

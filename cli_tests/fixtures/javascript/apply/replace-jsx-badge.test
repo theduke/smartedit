@@ -1,0 +1,12 @@
+> apply 'lr src/component.jsx:2-3 "  return <mark className=\"badge\">{label}</mark>;\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/component.jsx
+/** A small badge component. */
+export function Badge({ label }) {
+  return <mark className="badge">{label}</mark>;
+}
+
+export const Panel = ({ children }) => (
+  <section className="panel">{children}</section>
+);
+===

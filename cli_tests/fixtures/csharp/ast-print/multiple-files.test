@@ -1,0 +1,19 @@
+> ast-print --loc './src/*.cs'
+== src/Legacy.cs ==
+[0-18] namespace Fixtures.Legacy
+> [2-17] class/struct Counter
+>> [6-10] method Increment
+>> [11-16] method Add
+== end src/Legacy.cs ==
+
+== src/Program.cs ==
+[0-30] namespace Fixtures.Greetings
+> [2-6] interface IMessageWriter
+>> [4-5] method Write
+> [7-12] enum GreetingStyle
+> [13-14] class/struct Greeting
+> [15-30] class/struct Greeter
+>> [21-27] method Greet
+>> [28-29] class/struct Result
+== end src/Program.cs ==
+===

@@ -1,0 +1,13 @@
+> ast-print --loc ./src/main.py
+[5-8] def traced
+[10-11] type NameFormatter
+[13-17] def greet
+[19-37] class Worker
+> [24-28] class Config
+> [29-37] async def run
+>> [33-35] def normalize
+[39-53] def choose
+> [41-43] def enabled
+> [44-46] class Enabled
+> [49-51] def disabled
+===

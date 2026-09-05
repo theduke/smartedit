@@ -1,0 +1,6 @@
+> ast-print --function-bodies -s '"metadata"' ./src/package.json
+"metadata": {
+  "license": "MIT",
+  "repository": "https://example.test/fixture-app"
+}
+===

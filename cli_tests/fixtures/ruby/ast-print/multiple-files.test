@@ -1,0 +1,26 @@
+> ast-print --loc './src/*.rb'
+== src/helpers.rb ==
+[0-9] module Greetings
+> [1-8] module Formatting
+>> [2-5] def wrap
+>> [6-7] def empty
+== end src/helpers.rb ==
+
+== src/main.rb ==
+[0-25] module Greetings
+> [1-24] class Greeter
+>> [2-5] def initialize
+>> [6-9] def greet
+>> [10-13] def default
+>> [14-17] def label
+>> [18-23] class <anonymous>
+>>> [19-22] def version
+[26-29] def compatibility_label
+== end src/main.rb ==
+
+== src/patch.rb ==
+[0-12] class Release
+> [3-6] def label
+> [8-11] def compatibility_alias
+== end src/patch.rb ==
+===

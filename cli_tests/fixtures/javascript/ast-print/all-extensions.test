@@ -1,0 +1,35 @@
+> ast-print --loc ./src/main.js ./src/component.jsx ./src/module.mjs ./src/plugin.cjs
+== src/component.jsx ==
+[1-4] function Badge
+[5-8] function Panel
+== end src/component.jsx ==
+
+== src/main.js ==
+[1-16] class Worker
+> [5-8] method constructor
+> [10-15] async method run
+>> [11-12] function normalize
+>> [12-13] object callable
+>>> [12-13 shared-line] function call
+[18-29] object api
+> [19-22 shared-line] method greet
+> [22-23 shared-line] function twice
+> [23-28 shared-line] object nested
+>> [24-27 shared-line] method* values
+== end src/main.js ==
+
+== src/module.mjs ==
+[0-3] async function load
+[4-8] function* sequence
+[9-14] class default
+> [10-13] static method create
+== end src/module.mjs ==
+
+== src/plugin.cjs ==
+[0-1] object plugin
+[2-5] function plugin.install
+[6-7] function plugin.run
+[8-11] function plugin.Widget
+[12-15] function plugin.Widget.prototype.render
+== end src/plugin.cjs ==
+===

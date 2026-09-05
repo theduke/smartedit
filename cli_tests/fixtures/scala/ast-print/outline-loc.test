@@ -1,0 +1,14 @@
+> ast-print --loc ./src/main.scala
+[2-7] trait Repository
+> [3-4] def current
+> [5-6] def label
+[8-21] class Service
+> [9-12] def run
+> [13-20] object Defaults
+>> [14-15] def label
+>> [16-19] def create
+>>> [17-18] def current
+[22-25] object Service
+> [23-24] def create
+[26-27] def topLevel
+===

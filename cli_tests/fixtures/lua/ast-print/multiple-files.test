@@ -1,0 +1,14 @@
+> ast-print --loc ./src/main.lua ./src/helpers.lua
+== src/helpers.lua ==
+[2-5] function helpers.trim
+[6-9] function helpers.join.left
+[10-13] function helpers:describe
+== end src/helpers.lua ==
+
+== src/main.lua ==
+[3-7] function M.greet
+[8-15] function calculate
+> [9-12] function double
+[16-17] function M.empty
+== end src/main.lua ==
+===

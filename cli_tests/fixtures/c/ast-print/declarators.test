@@ -1,0 +1,8 @@
+> ast-print --loc ./src/declarators.h
+[0-1 shared-line] function first
+[0-1 shared-line] function second
+[1-2] function allocate
+[2-3] variable handler
+[3-4] variable handlers
+[4-5] function factory
+===

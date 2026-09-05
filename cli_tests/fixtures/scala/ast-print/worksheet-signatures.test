@@ -1,0 +1,5 @@
+> ast-print --signatures --loc ./src/worksheet.sc
+[2-3] def format(value: Int): String =
+[4-7] object Worksheet
+> [5-6] def twice(value: Int): Int =
+===

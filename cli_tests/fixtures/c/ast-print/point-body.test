@@ -1,0 +1,10 @@
+> ast-print --loc --type-bodies --type-select Point ./src/api.h
+[2-6 shared-line] struct Point {
+                      int x;
+                      int y;
+                  }
+[2-6 shared-line] typedef struct Point {
+                      int x;
+                      int y;
+                  } Point;
+===

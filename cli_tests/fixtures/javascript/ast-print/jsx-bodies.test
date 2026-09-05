@@ -1,0 +1,8 @@
+> ast-print --loc --function-bodies ./src/component.jsx
+[1-4] export function Badge({ label }) {
+        return <span className="badge">{label}</span>;
+      }
+[5-8] export const Panel = ({ children }) => (
+        <section className="panel">{children}</section>
+      );
+===

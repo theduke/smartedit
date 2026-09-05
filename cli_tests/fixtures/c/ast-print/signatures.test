@@ -1,0 +1,22 @@
+> ast-print --loc --signatures ./src/api.h
+[0-1] typedef unsigned long Size;
+[2-6 shared-line] struct Point
+> [3-4] int x;
+> [4-5] int y;
+[2-6 shared-line] typedef struct Point {
+                      int x;
+                      int y;
+                  } Point;
+[7-11 shared-line] union Value
+> [8-9] int integer;
+> [9-10] float decimal;
+[7-11 shared-line] typedef union Value {
+                       int integer;
+                       float decimal;
+                   } Value;
+[12-16] enum Color
+> [13-14 shared-line] COLOR_RED
+> [14-15 shared-line] COLOR_BLUE
+[17-18] int manhattan(Point point);
+[18-19] int (*callback)(int);
+===

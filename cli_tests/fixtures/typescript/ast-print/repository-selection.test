@@ -1,0 +1,7 @@
+> ast-print -S Repository --loc --doc --signatures ./src/main.ts
+/** Persistent storage used by the service. */
+[1-6] export interface Repository<T>
+> [2-3] readonly name: string;
+> [3-4] find(id: string): Promise<T | undefined>;
+> [4-5] save(value: T): Promise<void>;
+===

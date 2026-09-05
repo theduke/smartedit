@@ -1,0 +1,16 @@
+> apply 'tr src/patch.rb "draft" "ready"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rb
+class Release
+  DRAFT = "ready"
+
+  def label
+    DRAFT
+  end
+
+  # TODO: remove before release
+  def compatibility_alias
+    label
+  end
+end
+===

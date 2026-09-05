@@ -1,0 +1,22 @@
+> apply --dry-run 'tr src/patch.py "GREETING" "SALUTATION"'
+Dry run
+Mode: snapshot
+Stages: 1
+Modifications: 1
+Actions: 1
+
+Stage 1
+  Modification 1: 1 action(s)
+  - write file `src/patch.py` (144 bytes)
+=== src/patch.py
+TODO = "remove this marker"
+GREETING = "hello"
+
+
+def old_name(value: str) -> str:
+    return value.upper()
+
+
+class Settings:
+    timeout = 10
+===

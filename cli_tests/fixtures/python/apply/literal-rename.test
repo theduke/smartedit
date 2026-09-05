@@ -1,0 +1,14 @@
+> apply 'tr src/patch.py "GREETING" "SALUTATION"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.py
+TODO = "remove this marker"
+SALUTATION = "hello"
+
+
+def old_name(value: str) -> str:
+    return value.upper()
+
+
+class Settings:
+    timeout = 10
+===

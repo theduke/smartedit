@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -31,10 +32,29 @@ pub fn resolve_root(root: Option<&Path>, current_dir: &Path) -> PathBuf {
 }
 
 pub fn display_path(path: &Path, root: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    if let Ok(relative) = path.strip_prefix(root) {
+        return format_path(relative);
+    }
+
+    let canonical_root = fs::canonicalize(root).ok();
+    let relative = canonical_root
+        .as_deref()
+        .and_then(|canonical_root| path.strip_prefix(canonical_root).ok());
+    format_path(relative.unwrap_or(path))
+}
+
+fn format_path(path: &Path) -> String {
+    let display = path.display().to_string();
+
+    #[cfg(windows)]
+    {
+        display.replace('\\', "/")
+    }
+
+    #[cfg(not(windows))]
+    {
+        display
+    }
 }
 
 pub fn format_program_mode(mode: ProgramMode) -> &'static str {
@@ -133,11 +153,13 @@ fn expand_tabs(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
     use std::io::{self, Write};
 
     use smartedit::{ParseError, Span};
 
-    use super::{format_parse_errors, write_output};
+    use super::{display_path, format_parse_errors, write_output};
 
     struct FailingWriter(io::ErrorKind);
 
@@ -160,6 +182,14 @@ mod tests {
                 span: Span::new(start, end),
             }],
         )
+    }
+
+    #[test]
+    fn displays_paths_relative_to_a_noncanonical_root() {
+        let root = env::current_dir().unwrap();
+        let canonical_path = fs::canonicalize(&root).unwrap().join("src/main.rs");
+
+        assert_eq!(display_path(&canonical_path, &root), "src/main.rs");
     }
 
     #[test]

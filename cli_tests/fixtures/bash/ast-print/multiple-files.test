@@ -1,0 +1,16 @@
+> ast-print --loc './src/*.{sh,bash}'
+== src/functions.sh ==
+[3-7] function build_image
+[8-13] function deploy
+[14-20] function outer
+> [15-18] function helper
+== end src/functions.sh ==
+
+== src/loose.sh ==
+
+== end src/loose.sh ==
+
+== src/release.bash ==
+[2-23] function publish
+== end src/release.bash ==
+===

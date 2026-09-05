@@ -1,0 +1,6 @@
+[overrides]
+environment = "staging"
+
+[overrides.features]
+telemetry = false
+cache = true

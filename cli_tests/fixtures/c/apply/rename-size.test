@@ -1,0 +1,33 @@
+> apply 'tr src/api.h r"\bSize\b" "Length"; tr src/helpers.c r"\bSize\b" "Length"'
+Applied 2 modification(s) across 1 stage(s) in snapshot mode.
+=== src/api.h
+typedef unsigned long Length;
+
+typedef struct Point {
+    int x;
+    int y;
+} Point;
+
+typedef union Value {
+    int integer;
+    float decimal;
+} Value;
+
+enum Color {
+    COLOR_RED,
+    COLOR_BLUE,
+};
+
+int manhattan(Point point);
+int (*callback)(int);
+=== src/helpers.c
+#include "api.h"
+
+int manhattan(Point point) {
+    return point.x + point.y;
+}
+
+Length point_size(void) {
+    return sizeof(Point);
+}
+===

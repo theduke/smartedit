@@ -1,0 +1,5 @@
+> ast-print --loc --function-bodies -s Card ./src/components.tsx
+[7-10] export function Card({ title, children }: CardProps) {
+         return <article className="card"><h2>{title}</h2>{children}</article>;
+       }
+===

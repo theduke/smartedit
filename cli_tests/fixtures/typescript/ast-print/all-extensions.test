@@ -1,0 +1,48 @@
+> ast-print --loc --signatures ./src/main.ts ./src/ambient.d.ts ./src/modules.mts ./src/common.cts
+== src/ambient.d.ts ==
+[0-9] declare namespace Fixtures
+> [1-4] interface Options
+>> [2-3] verbose?: boolean;
+> [5-8] namespace Internal
+>> [6-7] export function trace(message: string): void;
+[10-16] declare module "virtual:service"
+> [11-14] export interface Plugin
+>> [12-13] install(options?: Fixtures.Options): void;
+> [14-15] export const plugin: Plugin;
+[17-22] declare global
+> [18-21] interface Window
+>> [19-20] fixtureService?: Fixtures.Internal;
+== end src/ambient.d.ts ==
+
+== src/common.cts ==
+[0-1] const registry: Record<string, number> =
+[2-3] export = registry;
+== end src/common.cts ==
+
+== src/main.ts ==
+[1-6] export interface Repository<T>
+> [2-3] readonly name: string;
+> [3-4] find(id: string): Promise<T | undefined>;
+> [4-5] save(value: T): Promise<void>;
+[8-26] @injectable
+       export abstract class Service<T extends { id: string }>
+> [10-11] protected abstract readonly repository: Repository<T>;
+> [11-12] public readonly invoke: (id: string) => Promise<T>;
+> [13-16 shared-line] constructor(public readonly label: string)
+>> [14-15] this.invoke = (id) =>
+> [13-14 shared-line] public readonly label: string
+> [17-18] abstract status(): "ready" | "stopped";
+> [20-25] async run(id: string): Promise<T>
+[27-28] export type ServiceId = `${string}:${number}`;
+[29-33] export const enum Priority
+[34-35] export function format(value: string): string;
+[35-36] export function format(value: number): string;
+[36-39] export function format(value: string | number): string
+== end src/main.ts ==
+
+== src/modules.mts ==
+[1-4] export async function load(url: URL): Promise<string>
+[5-10] export default class ModuleLoader
+> [6-9] static create(): ModuleLoader
+== end src/modules.mts ==
+===

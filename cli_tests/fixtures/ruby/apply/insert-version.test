@@ -1,0 +1,17 @@
+> apply 'li src/patch.rb:2 "  VERSION = \"0.1.0\"\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rb
+class Release
+  DRAFT = "draft"
+  VERSION = "0.1.0"
+
+  def label
+    DRAFT
+  end
+
+  # TODO: remove before release
+  def compatibility_alias
+    label
+  end
+end
+===

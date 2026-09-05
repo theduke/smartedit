@@ -1,0 +1,5 @@
+> ast-print --function-bodies --select 'Greetings.Greeter.greet' ./src/main.rb
+def greet(punctuation = "!")
+  "Hello, #{@name}#{punctuation}"
+end
+===

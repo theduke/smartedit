@@ -1,0 +1,16 @@
+> apply 'tr src/patch.lua "pending" "active"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.lua
+local M = {}
+
+-- TODO: remove after the release.
+function M.status()
+  return "active"
+end
+
+function M.add(left, right)
+  return left + right
+end
+
+return M
+===

@@ -1,0 +1,25 @@
+> ast-print --type-bodies --type-select Greetings.Greeter ./src/main.rb
+class Greeter
+  def initialize(name)
+    @name = name
+  end
+
+  def greet(punctuation = "!")
+    "Hello, #{@name}#{punctuation}"
+  end
+
+  def self.default
+    new("world")
+  end
+
+  def self.label
+    "default"
+  end
+
+  class << self
+    def version
+      "1.0"
+    end
+  end
+end
+===

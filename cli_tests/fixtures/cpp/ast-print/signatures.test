@@ -1,0 +1,20 @@
+> ast-print --signatures --loc ./src/main.cpp
+[2-35 shared-line] namespace math
+> [4-14] template <typename T>
+>        class Box
+>> [7-8] explicit Box(T value);
+>> [8-9] T get() const;
+>> [9-10] void set(T value);
+>> [12-13] T value_;
+> [15-20] class Shape
+>> [17-18] virtual double area() const = 0;
+>> [18-19] void (*callback)(int);
+> [21-22] enum class Color
+>> [21-22 shared-line] Red
+>> [21-22 shared-line] Green
+>> [21-22 shared-line] Blue
+> [23-24] using StringBox = Box<std::string>;
+> [25-29] template <typename T>
+>         T identity(T value)
+> [30-33] int add(int left, int right)
+===

@@ -1,0 +1,7 @@
+> apply 'li src/loose.sh:1 "set -euo pipefail\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/loose.sh
+#!/usr/bin/env bash
+set -euo pipefail
+echo "hello, ${USER:-world}"
+===

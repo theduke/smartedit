@@ -1,0 +1,16 @@
+> apply 'lr src/workflow.yml:8-11 "    steps:\n      - uses: actions/checkout@v4\n      - run: cargo fmt --check\n      - run: cargo test --all\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/workflow.yml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, beta]
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo test --all
+===

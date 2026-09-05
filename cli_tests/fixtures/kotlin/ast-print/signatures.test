@@ -1,0 +1,10 @@
+> ast-print --signatures ./src/main.kt
+enum class Status
+data class Greeter(val prefix: String = "Hello")
+> fun greet(name: String): String
+> object Defaults
+>> fun create(): Greeter
+class Registry
+> fun size(): Int
+fun topLevel(value: Int): String
+===

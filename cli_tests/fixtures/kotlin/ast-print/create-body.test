@@ -1,0 +1,3 @@
+> ast-print --function-bodies -s 'Greeter.Defaults.create' ./src/main.kt
+fun create(): Greeter = Greeter()
+===

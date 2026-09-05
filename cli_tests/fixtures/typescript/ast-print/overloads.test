@@ -1,0 +1,5 @@
+> ast-print -s format --loc --signatures ./src/main.ts
+[34-35] export function format(value: string): string;
+[35-36] export function format(value: number): string;
+[36-39] export function format(value: string | number): string
+===

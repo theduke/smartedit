@@ -1,0 +1,15 @@
+> apply 'ldm src/patch.lua r"^-- TODO"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.lua
+local M = {}
+
+function M.status()
+  return "pending"
+end
+
+function M.add(left, right)
+  return left + right
+end
+
+return M
+===

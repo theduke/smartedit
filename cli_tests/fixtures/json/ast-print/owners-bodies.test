@@ -1,0 +1,4 @@
+> ast-print --loc --function-bodies -s '"owners".*' ./src/package.json
+[22-23 shared-line] "primary": "Ada"
+[23-24] "reviewers": ["Lin", "Mina"]
+===

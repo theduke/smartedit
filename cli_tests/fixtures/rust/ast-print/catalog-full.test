@@ -1,0 +1,33 @@
+> ast-print --loc --doc --signatures ./src/catalog.rs
+//! A catalogue of Rust declarations.
+[3-4] use std::fmt::{self, Display};
+[4-5] use std::collections::*;
+/// The selected answer.
+[6-8] pub const ANSWER: usize = 42;
+[8-9] pub static mut COUNTER: i32 = 0;
+#[derive(Clone, Debug)]
+[10-14] pub struct Store<T>
+[15-20] pub enum Choice
+[21-25] pub union Bits
+[26-27] pub type Handler = fn(&str) -> usize;
+[28-33] pub trait Render
+> [29-30] const NAME: &'static str;
+> [30-31] type Output;
+> [31-32] fn render(&self) -> Self::Output;
+[34-43] impl<T> Store<T>
+> [35-38] pub fn new() -> Self
+> [39-42] pub fn push(&mut self, entry: T)
+[44-52] impl<T: Display> Render for Store<T>
+> [45-46] const NAME: &'static str = "store";
+> [46-47] type Output = String;
+> [48-51] fn render(&self) -> Self::Output
+[53-56] macro_rules! announce
+[57-60] extern "C"
+> [58-59] fn puts(value: *const i8) -> i32;
+[61-72] pub mod nested
+> /// A background worker.
+> [62-64] pub struct Worker;
+> [65-71] impl Worker
+>> [66-70] pub fn launch(&self)
+>>> [67-68] fn local() -> &'static str
+===

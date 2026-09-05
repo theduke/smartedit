@@ -1,0 +1,14 @@
+> apply 'lr src/main.c:2-5 "int sum(int left, int right) {\n    return left + right;\n}\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/main.c
+#include "api.h"
+
+int sum(int left, int right) {
+    return left + right;
+}
+
+int main(void) {
+    Point origin = {0, 0};
+    return add(origin.x, origin.y);
+}
+===

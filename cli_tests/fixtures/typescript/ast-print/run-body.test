@@ -1,0 +1,7 @@
+> ast-print -s 'Service.run' --function-bodies --loc ./src/main.ts
+[20-25] async run(id: string): Promise<T> {
+          const item = await this.repository.find(id);
+          if (!item) throw new Error(`missing ${id}`);
+          return item;
+        }
+===

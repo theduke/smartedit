@@ -1,0 +1,8 @@
+> ast-print --loc --function-bodies --select outer ./src/functions.sh
+[14-20] outer() {
+          helper() {
+            printf 'nested helper\n'
+          }
+          helper
+        }
+===

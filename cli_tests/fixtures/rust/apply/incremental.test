@@ -1,0 +1,10 @@
+> apply --incremental 'ld src/patch.rs:0-1; ld src/patch.rs:0-1'
+Applied 2 modification(s) across 1 stage(s) in incremental mode.
+=== src/patch.rs
+
+pub fn greeting() -> &'static str {
+    "hello"
+}
+
+pub fn obsolete() {}
+===

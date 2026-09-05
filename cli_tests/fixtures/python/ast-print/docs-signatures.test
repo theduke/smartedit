@@ -1,0 +1,20 @@
+> ast-print --loc --doc --signatures ./src/main.py
+"""Utilities for processing jobs."""
+"""Mark a callable as traced."""
+[5-8] def traced(func):
+[10-11] type NameFormatter = Callable[[str], str]
+"""Format a friendly greeting."""
+[13-17] def greet(name: str, formatter: NameFormatter | None = None) -> str:
+"""A worker that processes a single job."""
+[19-37] class Worker:
+> """Runtime options for a worker."""
+> [24-28] class Config:
+> """Run one job asynchronously."""
+> [29-37] @traced
+>         async def run(self, job: str) -> str:
+>> [33-35] def normalize(value: str) -> str:
+[39-53] def choose(flag: bool) -> str:
+> [41-43] def enabled() -> str:
+> [44-46] class Enabled:
+> [49-51] def disabled() -> str:
+===

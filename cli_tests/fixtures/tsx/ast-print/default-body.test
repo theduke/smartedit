@@ -1,0 +1,3 @@
+> ast-print --loc --function-bodies -s default ./src/components.tsx
+[23-24] export default <T,>({ value }: { value: T }) => <output>{String(value)}</output>;
+===

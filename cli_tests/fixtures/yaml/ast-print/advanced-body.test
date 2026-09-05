@@ -1,0 +1,10 @@
+> ast-print --function-bodies ./src/advanced.yaml
+defaults: &defaults
+timeout: 30
+retries: 2
+production:
+  <<: *defaults
+  host: prod.example.test
+"quoted key":
+  value: "contains: punctuation"
+===

@@ -1,0 +1,30 @@
+> apply --dry-run 'tr src/settings.json "true" "false"'
+Dry run
+Mode: snapshot
+Stages: 1
+Modifications: 1
+Actions: 1
+
+Stage 1
+  Modification 1: 1 action(s)
+  - write file `src/settings.json` (264 bytes)
+=== src/settings.json
+{
+  "env": {
+    "development": {
+      "debug": true,
+      "endpoint": "http://localhost:3000"
+    },
+    "production": {
+      "debug": false
+    }
+  },
+  "limits": {
+    "retries": 3,
+    "timeoutMs": 5000
+  },
+  "deprecated": {
+    "legacyMode": true
+  }
+}
+===

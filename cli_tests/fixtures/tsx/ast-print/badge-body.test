@@ -1,0 +1,5 @@
+> ast-print --loc --function-bodies -s Badge ./src/components.tsx
+[19-22] export const Badge = ({ label }: { label: string }) => (
+          <span className="badge">{label}</span>
+        );
+===

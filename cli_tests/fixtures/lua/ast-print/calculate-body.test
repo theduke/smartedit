@@ -1,0 +1,9 @@
+> ast-print --function-bodies --select calculate ./src/main.lua
+local function calculate(value)
+  local function double(number)
+    return number * 2
+  end
+
+  return double(value) + 1
+end
+===

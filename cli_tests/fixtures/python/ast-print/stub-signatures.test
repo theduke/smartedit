@@ -1,0 +1,8 @@
+> ast-print --loc --signatures ./src/api.pyi
+[3-5] class Renderer(Protocol):
+> [4-5] def render(self, value: str) -> str:
+[7-9] @overload
+      def parse(value: str) -> str:
+[11-13] @overload
+        def parse(value: bytes) -> bytes:
+===

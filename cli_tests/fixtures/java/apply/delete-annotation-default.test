@@ -1,0 +1,29 @@
+> apply 'tr src/Contracts.java " default 1" ""'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/Contracts.java
+package fixtures.service;
+
+public interface Contracts<T> {
+    T transform(T value);
+
+    default String label(T value) {
+        return "contract:" + value;
+    }
+
+    enum Status {
+        ACTIVE,
+        DISABLED
+    }
+
+    record Result<T>(T value, Status status) {
+        public boolean active() {
+            return status == Status.ACTIVE;
+        }
+    }
+
+    @interface Marker {
+        String name() default "service";
+        int priority();
+    }
+}
+===

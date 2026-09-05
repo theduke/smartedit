@@ -1,0 +1,19 @@
+> ast-print --loc --signatures './src/*.tsx'
+== src/components.tsx ==
+[1-5] export interface CardProps
+> [2-3] title: string;
+> [3-4] children?: React.ReactNode;
+[7-10] export function Card({ title, children }: CardProps)
+[11-18] export class Panel extends React.Component<{ open: boolean }>
+> [12-13] close = () =>
+> [14-17] render()
+[19-22] export const Badge = ({ label }: { label: string }) =>
+[23-24] export default <T,>({ value }: { value: T }) =>
+== end src/components.tsx ==
+
+== src/namespaces.tsx ==
+[0-8] export namespace Admin
+> [2-5] export function Header()
+> [6-7] export const Footer = () =>
+== end src/namespaces.tsx ==
+===

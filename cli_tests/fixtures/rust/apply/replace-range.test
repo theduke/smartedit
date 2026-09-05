@@ -1,0 +1,12 @@
+> apply 'lr src/patch.rs:3-6 "pub fn greeting() {\n    println!(\"hi\");\n}\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.rs
+pub const STATUS: &str = "draft";
+pub const TODO: &str = "remove";
+
+pub fn greeting() {
+    println!("hi");
+}
+
+pub fn obsolete() {}
+===

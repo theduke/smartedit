@@ -1,0 +1,18 @@
+> apply --dry-run 'tr src/overrides.toml "staging" "production"'
+Dry run
+Mode: snapshot
+Stages: 1
+Modifications: 1
+Actions: 1
+
+Stage 1
+  Modification 1: 1 action(s)
+  - write file `src/overrides.toml` (92 bytes)
+=== src/overrides.toml
+[overrides]
+environment = "staging"
+
+[overrides.features]
+telemetry = false
+cache = true
+===

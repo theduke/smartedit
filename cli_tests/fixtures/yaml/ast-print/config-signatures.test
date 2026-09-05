@@ -1,0 +1,17 @@
+> ast-print --signatures ./src/config.yaml
+version
+service
+> name
+> enabled
+> tags
+workers
+> name
+> settings
+>> threads
+>> queue
+> name
+> settings
+>> threads
+>> queue
+message
+===

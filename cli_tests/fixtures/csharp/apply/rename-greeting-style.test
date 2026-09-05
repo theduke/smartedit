@@ -1,0 +1,34 @@
+> apply 'tr src/Program.cs "GreetingStyle" "GreetingTone"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/Program.cs
+namespace Fixtures.Greetings;
+
+public interface IMessageWriter
+{
+    void Write(string message);
+}
+
+public enum GreetingTone
+{
+    Formal,
+    Casual,
+}
+
+public readonly record struct Greeting(string Text, GreetingTone Style);
+
+public class Greeter<TWriter> where TWriter : IMessageWriter, new()
+{
+    private readonly TWriter writer = new();
+
+    public string Prefix { get; init; } = "Hello";
+
+    public Greeting Greet(string name, GreetingTone style = GreetingTone.Formal)
+    {
+        var text = $"{Prefix}, {name}!";
+        writer.Write(text);
+        return new Greeting(text, style);
+    }
+
+    public record Result(Greeting Greeting, bool Delivered);
+}
+===

@@ -1,0 +1,4 @@
+> ast-print --loc --signatures --select 'Fixtures.Greetings.Greeter.*' ./src/Program.cs
+[21-27] public Greeting Greet(string name, GreetingStyle style = GreetingStyle.Formal)
+[28-29] public record Result(Greeting Greeting, bool Delivered);
+===

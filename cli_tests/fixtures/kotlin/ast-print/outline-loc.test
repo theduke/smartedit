@@ -1,0 +1,10 @@
+> ast-print --loc ./src/main.kt
+[4-8] enum Status
+[9-18] class Greeter
+> [10-13] fun greet
+> [14-17] object Defaults
+>> [15-16] fun create
+[19-24] class Registry
+> [22-23] fun size
+[25-26] fun topLevel
+===

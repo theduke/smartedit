@@ -1,0 +1,20 @@
+> apply --dry-run 'tr src/patch.rs "draft" "ready"'
+Dry run
+Mode: snapshot
+Stages: 1
+Modifications: 1
+Actions: 1
+
+Stage 1
+  Modification 1: 1 action(s)
+  - write file `src/patch.rs` (140 bytes)
+=== src/patch.rs
+pub const STATUS: &str = "draft";
+pub const TODO: &str = "remove";
+
+pub fn greeting() -> &'static str {
+    "hello"
+}
+
+pub fn obsolete() {}
+===
