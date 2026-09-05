@@ -1,0 +1,18 @@
+> apply 'lm src/modules.mts:0-4 src/common.cts:0'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/modules.mts
+
+export default class ModuleLoader {
+  static create(): ModuleLoader {
+    return new ModuleLoader();
+  }
+}
+=== src/common.cts
+/** Load an ESM module. */
+export async function load(url: URL): Promise<string> {
+  return (await fetch(url)).text();
+}
+const registry: Record<string, number> = {};
+
+export = registry;
+===

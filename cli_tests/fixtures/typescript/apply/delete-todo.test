@@ -1,0 +1,11 @@
+> apply 'ldm src/patch.ts r"^// TODO"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.ts
+export interface Legacy {
+  status: "draft";
+}
+
+export function title(value: string): string {
+  return value.trim();
+}
+===

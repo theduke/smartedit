@@ -1,0 +1,12 @@
+> apply 'lr src/patch.ts:5-8 "export function title(value: string): string {\n  return value.toUpperCase();\n}\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.ts
+// TODO: remove compatibility marker
+export interface Legacy {
+  status: "draft";
+}
+
+export function title(value: string): string {
+  return value.toUpperCase();
+}
+===

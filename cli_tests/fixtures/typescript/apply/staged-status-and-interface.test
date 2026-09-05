@@ -1,0 +1,12 @@
+> apply 'tr src/patch.ts "Legacy" "Current"; apply; tr src/patch.ts "draft" "ready"'
+Applied 2 modification(s) across 2 stage(s) in snapshot mode.
+=== src/patch.ts
+// TODO: remove compatibility marker
+export interface Current {
+  status: "ready";
+}
+
+export function title(value: string): string {
+  return value.trim();
+}
+===

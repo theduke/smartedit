@@ -1,0 +1,13 @@
+> apply 'li src/patch.ts:3 "  retries?: number;\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.ts
+// TODO: remove compatibility marker
+export interface Legacy {
+  status: "draft";
+  retries?: number;
+}
+
+export function title(value: string): string {
+  return value.trim();
+}
+===
