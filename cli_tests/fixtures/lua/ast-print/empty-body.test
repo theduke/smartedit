@@ -1,0 +1,3 @@
+> ast-print --function-bodies --select 'M.empty' ./src/main.lua
+function M.empty() end
+===

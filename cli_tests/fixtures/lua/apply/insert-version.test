@@ -1,0 +1,17 @@
+> apply 'li src/patch.lua:2 "local version = 1\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.lua
+local M = {}
+
+local version = 1
+-- TODO: remove after the release.
+function M.status()
+  return "pending"
+end
+
+function M.add(left, right)
+  return left + right
+end
+
+return M
+===

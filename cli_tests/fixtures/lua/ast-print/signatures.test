@@ -1,0 +1,14 @@
+> ast-print --signatures ./src/main.lua ./src/helpers.lua
+== src/helpers.lua ==
+function helpers.trim(value)
+function helpers.join.left(first, second)
+function helpers:describe()
+== end src/helpers.lua ==
+
+== src/main.lua ==
+function M.greet(name, punctuation)
+local function calculate(value)
+> local function double(number)
+function M.empty()
+== end src/main.lua ==
+===
