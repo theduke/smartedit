@@ -102,23 +102,12 @@ impl FileAst {
                 tree_sitter_bash::LANGUAGE.into(),
                 parse_bash_item,
             ),
-            AstLanguage::C => parse_generic_ast(
-                source,
-                AstLanguage::C,
-                tree_sitter_c::LANGUAGE.into(),
-                parse_c_item,
-            ),
-            AstLanguage::Cpp => parse_generic_ast(
-                source,
-                AstLanguage::Cpp,
-                tree_sitter_cpp::LANGUAGE.into(),
-                parse_cpp_item,
-            ),
-            AstLanguage::CSharp => parse_generic_ast(
+            AstLanguage::C | AstLanguage::Cpp => parse_c_family_ast(language, source),
+            AstLanguage::CSharp => parse_ast_with_collector(
                 source,
                 AstLanguage::CSharp,
                 tree_sitter_c_sharp::LANGUAGE.into(),
-                parse_csharp_item,
+                collect_csharp_items,
             ),
             AstLanguage::Go => parse_go_ast(source),
             AstLanguage::Java => parse_java_ast(source),
@@ -6022,7 +6011,7 @@ fn parse_scala_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_scala_item))
             .unwrap_or_default(),
@@ -6085,7 +6074,7 @@ fn parse_java_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_java_item))
             .unwrap_or_default(),
@@ -6122,7 +6111,24 @@ fn parse_kotlin_ast(source: &str) -> Result<FileAst> {
 
 fn parse_kotlin_item(node: Node<'_>, source: &str) -> Option<AstItem> {
     let (kind, kind_str) = match node.kind() {
-        "class_declaration" => (AstItemKind::Class, "class"),
+        "class_declaration" => {
+            let mut cursor = node.walk();
+            let is_enum = node.named_children(&mut cursor).any(|child| {
+                if child.kind() != "modifiers" {
+                    return false;
+                }
+                let mut cursor = child.walk();
+                child.named_children(&mut cursor).any(|modifier| {
+                    modifier.kind() == "class_modifier"
+                        && trimmed_node_text(modifier, source) == "enum"
+                })
+            });
+            if is_enum {
+                (AstItemKind::Enum, "enum")
+            } else {
+                (AstItemKind::Class, "class")
+            }
+        }
         "object_declaration" => (AstItemKind::Class, "object"),
         "function_declaration" => (AstItemKind::Function, "fun"),
         _ => return None,
@@ -6134,7 +6140,10 @@ fn parse_kotlin_item(node: Node<'_>, source: &str) -> Option<AstItem> {
     let body = {
         let mut cursor = node.walk();
         node.children(&mut cursor).find(|c| {
-            c.kind() == "class_body" || c.kind() == "function_body" || c.kind() == "block"
+            matches!(
+                c.kind(),
+                "class_body" | "enum_class_body" | "function_body" | "block"
+            )
         })
     };
 
@@ -6149,7 +6158,7 @@ fn parse_kotlin_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_kotlin_item))
             .unwrap_or_default(),
@@ -6195,6 +6204,19 @@ fn parse_lua_item(node: Node<'_>, source: &str) -> Option<AstItem> {
     let name =
         child_text_by_field(node, "name", source).unwrap_or_else(|| "<anonymous>".to_owned());
 
+    let signature = node
+        .child_by_field_name("parameters")
+        .map(|parameters| {
+            source[node.start_byte()..parameters.end_byte()]
+                .trim()
+                .to_owned()
+        })
+        .unwrap_or_else(|| trimmed_node_text(node, source));
+    let children = node
+        .child_by_field_name("body")
+        .map(|body| collect_generic_items(body, source, parse_lua_item))
+        .unwrap_or_default();
+
     Some(AstItem {
         kind,
         name: Some(name.clone()),
@@ -6205,16 +6227,31 @@ fn parse_lua_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         attributes: None,
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
-        signature: Some(trimmed_node_text(node, source)),
-        body: None,
-        children: Vec::new(),
+        signature: Some(signature),
+        body: Some(trimmed_node_text(node, source)),
+        children,
     })
 }
+
 fn parse_generic_ast(
     source: &str,
     ast_language: AstLanguage,
     tree_sitter_language: tree_sitter::Language,
     parse_item: fn(Node<'_>, &str) -> Option<AstItem>,
+) -> Result<FileAst> {
+    parse_ast_with_collector(
+        source,
+        ast_language,
+        tree_sitter_language,
+        |root, source| collect_generic_items(root, source, parse_item),
+    )
+}
+
+fn parse_ast_with_collector(
+    source: &str,
+    ast_language: AstLanguage,
+    tree_sitter_language: tree_sitter::Language,
+    collect_items: impl FnOnce(Node<'_>, &str) -> Vec<AstItem>,
 ) -> Result<FileAst> {
     let mut parser = Parser::new();
     let lang_name = format!("{:?}", ast_language).to_lowercase();
@@ -6231,7 +6268,7 @@ fn parse_generic_ast(
             message: "tree-sitter returned no parse tree".to_owned(),
         })?;
     let root = tree.root_node();
-    let mut items = collect_generic_items(root, source, parse_item);
+    let mut items = collect_items(root, source);
     mark_overlapping_sibling_locations(&mut items);
 
     Ok(FileAst {
@@ -6243,71 +6280,302 @@ fn parse_generic_ast(
     })
 }
 
-fn parse_c_item(node: Node<'_>, source: &str) -> Option<AstItem> {
-    let (kind, kind_str) = match node.kind() {
-        "struct_specifier" => (AstItemKind::Class, "struct"),
-        "enum_specifier" => (AstItemKind::Enum, "enum"),
-        "function_definition" | "declaration" => (AstItemKind::Function, "function"),
-        _ => return None,
+fn parse_c_family_ast(language: AstLanguage, source: &str) -> Result<FileAst> {
+    let grammar = if language == AstLanguage::Cpp {
+        tree_sitter_cpp::LANGUAGE.into()
+    } else {
+        tree_sitter_c::LANGUAGE.into()
     };
-
-    // Attempt to find name in different variations
-    let name = child_text_by_field(node, "declarator", source)
-        .or_else(|| child_text_by_field(node, "name", source))
-        .unwrap_or_else(|| "<anonymous>".to_owned());
-    let body = node.child_by_field_name("body");
-
-    Some(AstItem {
-        kind,
-        name: Some(name.clone()),
-        associated_type: None,
-        location: location_for_node(node, source),
-        docs: None,
-        inner_docs: None,
-        attributes: None,
-        source_preamble: None,
-        summary: format!("{} {}", kind_str, name),
-        signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
-        children: body
-            .map(|b| collect_generic_items(b, source, parse_c_item))
-            .unwrap_or_default(),
+    parse_ast_with_collector(source, language, grammar, |root, source| {
+        collect_c_items(root, source, language == AstLanguage::Cpp)
     })
 }
 
-fn parse_cpp_item(node: Node<'_>, source: &str) -> Option<AstItem> {
-    let (kind, kind_str) = match node.kind() {
-        "class_specifier" | "struct_specifier" => (AstItemKind::Class, "class/struct"),
-        "enum_specifier" => (AstItemKind::Enum, "enum"),
-        "function_definition" | "declaration" => (AstItemKind::Function, "function"),
-        _ => return None,
-    };
+fn collect_c_items(node: Node<'_>, source: &str, cpp: bool) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor)
+        .flat_map(|child| parse_c_items(child, source, cpp, None))
+        .collect()
+}
 
-    let name = child_text_by_field(node, "declarator", source)
-        .or_else(|| child_text_by_field(node, "name", source))
-        .unwrap_or_else(|| "<anonymous>".to_owned());
+fn parse_c_items<'a>(
+    node: Node<'a>,
+    source: &str,
+    cpp: bool,
+    owner: Option<Node<'a>>,
+) -> Vec<AstItem> {
+    let render_node = owner.unwrap_or(node);
+    match node.kind() {
+        "template_declaration" => {
+            // Parameters and constraints belong to the declaration, not to its children.
+            let mut cursor = node.walk();
+            node.named_children(&mut cursor)
+                .filter(|child| {
+                    !matches!(
+                        child.kind(),
+                        "template_parameter_list" | "requires_clause" | "comment"
+                    )
+                })
+                .flat_map(|child| parse_c_items(child, source, cpp, Some(render_node)))
+                .collect()
+        }
+        "namespace_definition" => {
+            let name = child_text_by_field(node, "name", source)
+                .unwrap_or_else(|| "<anonymous>".to_owned())
+                .replace("::", ".");
+            vec![c_ast_item(
+                render_node,
+                node,
+                source,
+                cpp,
+                AstItemKind::Module,
+                "namespace",
+                name,
+            )]
+        }
+        "class_specifier" | "struct_specifier" | "union_specifier" | "enum_specifier" => {
+            let (kind, keyword) = match node.kind() {
+                "enum_specifier" => (AstItemKind::Enum, "enum"),
+                "union_specifier" => (AstItemKind::Union, "union"),
+                "struct_specifier" if !cpp => (AstItemKind::Struct, "struct"),
+                _ => (AstItemKind::Class, "class/struct"),
+            };
+            let name = child_text_by_field(node, "name", source)
+                .unwrap_or_else(|| "<anonymous>".to_owned());
+            vec![c_ast_item(
+                render_node,
+                node,
+                source,
+                cpp,
+                kind,
+                keyword,
+                name,
+            )]
+        }
+        "function_definition" | "declaration" | "field_declaration" | "type_definition" => {
+            let mut items = Vec::new();
+            if let Some(ty) = node.child_by_field_name("type") {
+                // A declaration may define a type and one or more variables at once.
+                if ty.child_by_field_name("body").is_some() {
+                    items.extend(parse_c_items(ty, source, cpp, None));
+                }
+            }
+            let mut cursor = node.walk();
+            for declarator in node.children_by_field_name("declarator", &mut cursor) {
+                let Some((name, is_function)) = c_declarator_info(declarator, source) else {
+                    continue;
+                };
+                let (kind, keyword) = if node.kind() == "type_definition" {
+                    (AstItemKind::TypeAlias, "type")
+                } else if node.kind() == "function_definition" || is_function {
+                    (AstItemKind::Function, "function")
+                } else {
+                    (AstItemKind::Field, "variable")
+                };
+                items.push(c_ast_item(
+                    render_node,
+                    node,
+                    source,
+                    cpp,
+                    kind,
+                    keyword,
+                    name,
+                ));
+            }
+            items
+        }
+        "alias_declaration" => {
+            let name = child_text_by_field(node, "name", source)
+                .unwrap_or_else(|| "<anonymous>".to_owned());
+            vec![c_ast_item(
+                render_node,
+                node,
+                source,
+                cpp,
+                AstItemKind::TypeAlias,
+                "type",
+                name,
+            )]
+        }
+        "enumerator" => {
+            let name = child_text_by_field(node, "name", source)
+                .unwrap_or_else(|| "<anonymous>".to_owned());
+            vec![c_ast_item(
+                render_node,
+                node,
+                source,
+                cpp,
+                AstItemKind::Field,
+                "variant",
+                name,
+            )]
+        }
+        _ => collect_c_items(node, source, cpp),
+    }
+}
+
+/// Read only the declarator chain: parameter names and initializer expressions are not names.
+fn c_declarator_info(node: Node<'_>, source: &str) -> Option<(String, bool)> {
+    fn conversion_parameters(node: Node<'_>) -> Option<Node<'_>> {
+        if node.kind() == "abstract_function_declarator" {
+            return node.child_by_field_name("parameters");
+        }
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find_map(conversion_parameters)
+    }
+
+    fn walk(node: Node<'_>, source: &str) -> Option<(String, Option<bool>)> {
+        if node.kind() == "operator_cast" {
+            let parameters = conversion_parameters(node)?;
+            return Some((
+                source_fragment(source, node.start_byte(), parameters.start_byte())
+                    .replace("::", "."),
+                Some(true),
+            ));
+        }
+        if node.kind() == "qualified_identifier"
+            && let Some(name) = node.child_by_field_name("name")
+            && name.kind() == "operator_cast"
+        {
+            let (name_text, binding) = walk(name, source)?;
+            let scope =
+                source_fragment(source, node.start_byte(), name.start_byte()).replace("::", ".");
+            return Some((format!("{scope}{name_text}"), binding));
+        }
+        if matches!(
+            node.kind(),
+            "identifier"
+                | "field_identifier"
+                | "type_identifier"
+                | "qualified_identifier"
+                | "destructor_name"
+                | "operator_name"
+        ) {
+            return Some((trimmed_node_text(node, source).replace("::", "."), None));
+        }
+        let inner = node.child_by_field_name("declarator").or_else(|| {
+            if matches!(
+                node.kind(),
+                "parenthesized_declarator"
+                    | "parenthesized_field_declarator"
+                    | "parenthesized_type_declarator"
+                    | "reference_declarator"
+            ) {
+                let mut cursor = node.walk();
+                node.named_children(&mut cursor)
+                    .find(|child| !matches!(child.kind(), "comment" | "ERROR"))
+            } else {
+                None
+            }
+        })?;
+        let (name, binding) = walk(inner, source)?;
+        // The first binding outward from the identifier determines whether this is a
+        // function or an object such as a function pointer or array of pointers.
+        let binding = binding.or(match node.kind() {
+            "function_declarator" => Some(true),
+            "pointer_declarator"
+            | "pointer_field_declarator"
+            | "pointer_type_declarator"
+            | "reference_declarator"
+            | "array_declarator"
+            | "array_field_declarator"
+            | "array_type_declarator" => Some(false),
+            _ => None,
+        });
+        Some((name, binding))
+    }
+    walk(node, source).map(|(name, binding)| (name, binding.unwrap_or(false)))
+}
+
+fn c_ast_item(
+    render_node: Node<'_>,
+    node: Node<'_>,
+    source: &str,
+    cpp: bool,
+    kind: AstItemKind,
+    keyword: &str,
+    name: String,
+) -> AstItem {
     let body = node.child_by_field_name("body");
-
-    Some(AstItem {
+    // Tree-sitter keeps the terminating semicolon outside standalone type specifiers.
+    let end_node = render_node
+        .next_sibling()
+        .filter(|next| next.kind() == ";")
+        .unwrap_or(render_node);
+    let signature = if body.is_some() {
+        signature_text_with_body(render_node, body, source)
+    } else {
+        source_fragment(source, render_node.start_byte(), end_node.end_byte())
+    };
+    AstItem {
         kind,
         name: Some(name.clone()),
         associated_type: None,
-        location: location_for_node(node, source),
+        location: AstLocationRange::from_source_span(
+            source,
+            render_node.start_position(),
+            end_node.end_position(),
+            render_node.start_byte(),
+            end_node.end_byte(),
+        ),
         docs: None,
         inner_docs: None,
         attributes: None,
         source_preamble: None,
-        summary: format!("{} {}", kind_str, name),
-        signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        summary: format!("{keyword} {name}"),
+        signature: Some(signature),
+        body: Some(source_fragment(
+            source,
+            render_node.start_byte(),
+            end_node.end_byte(),
+        )),
         children: body
-            .map(|b| collect_generic_items(b, source, parse_cpp_item))
+            .map(|body| collect_c_items(body, source, cpp))
             .unwrap_or_default(),
-    })
+    }
+}
+
+fn collect_csharp_items(node: Node<'_>, source: &str) -> Vec<AstItem> {
+    let mut cursor = node.walk();
+    let mut items = Vec::new();
+    let mut file_namespace: Option<AstItem> = None;
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "file_scoped_namespace_declaration" {
+            let mut namespace = parse_csharp_item(child, source).unwrap();
+            namespace.location = AstLocationRange::from_source_span(
+                source,
+                child.start_position(),
+                node.end_position(),
+                child.start_byte(),
+                node.end_byte(),
+            );
+            namespace.body = Some(source_fragment(source, child.start_byte(), node.end_byte()));
+            file_namespace = Some(namespace);
+            continue;
+        }
+        let children = if let Some(item) = parse_csharp_item(child, source) {
+            vec![item]
+        } else {
+            collect_csharp_items(child, source)
+        };
+        if let Some(namespace) = &mut file_namespace {
+            namespace.children.extend(children);
+        } else {
+            items.extend(children);
+        }
+    }
+    if let Some(namespace) = file_namespace {
+        items.push(namespace);
+    }
+    items
 }
 
 fn parse_csharp_item(node: Node<'_>, source: &str) -> Option<AstItem> {
     let (kind, kind_str) = match node.kind() {
+        "namespace_declaration" | "file_scoped_namespace_declaration" => {
+            (AstItemKind::Module, "namespace")
+        }
         "class_declaration" | "record_declaration" | "struct_declaration" => {
             (AstItemKind::Class, "class/struct")
         }
@@ -6332,9 +6600,9 @@ fn parse_csharp_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
-            .map(|b| collect_generic_items(b, source, parse_csharp_item))
+            .map(|b| collect_csharp_items(b, source))
             .unwrap_or_default(),
     })
 }
@@ -6362,7 +6630,7 @@ fn parse_ruby_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_ruby_item))
             .unwrap_or_default(),
@@ -6393,7 +6661,7 @@ fn parse_php_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_php_item))
             .unwrap_or_default(),
@@ -6421,7 +6689,7 @@ fn parse_bash_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(signature_text_with_body(node, body, source)),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_bash_item))
             .unwrap_or_default(),
@@ -6449,7 +6717,7 @@ fn parse_json_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(name),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_json_item))
             .unwrap_or_default(),
@@ -6458,7 +6726,7 @@ fn parse_json_item(node: Node<'_>, source: &str) -> Option<AstItem> {
 
 fn parse_yaml_item(node: Node<'_>, source: &str) -> Option<AstItem> {
     let (kind, kind_str) = match node.kind() {
-        "block_mapping_pair" => (AstItemKind::Function, "key"),
+        "block_mapping_pair" | "flow_pair" => (AstItemKind::Function, "key"),
         _ => return None,
     };
 
@@ -6476,7 +6744,7 @@ fn parse_yaml_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(name),
-        body: body.map(|b| trimmed_node_text(b, source)),
+        body: Some(trimmed_node_text(node, source)),
         children: body
             .map(|b| collect_generic_items(b, source, parse_yaml_item))
             .unwrap_or_default(),
@@ -6493,12 +6761,10 @@ fn parse_toml_item(node: Node<'_>, source: &str) -> Option<AstItem> {
     let name = {
         let mut cursor = node.walk();
         node.children(&mut cursor)
-            .find(|c| c.kind() == "key" || c.kind() == "dotted_key" || c.kind() == "bare_key")
-            .map(|c| trimmed_node_text(c, source))
+            .find(|c| matches!(c.kind(), "key" | "dotted_key" | "bare_key" | "quoted_key"))
+            .map(|c| toml_key_name(c, source))
             .unwrap_or_else(|| "<anonymous>".to_owned())
     };
-
-    // In TOML table contents aren't nested syntactically under the table node usually (it's flat), but let's do our best.
 
     Some(AstItem {
         kind,
@@ -6511,7 +6777,62 @@ fn parse_toml_item(node: Node<'_>, source: &str) -> Option<AstItem> {
         source_preamble: None,
         summary: format!("{} {}", kind_str, name),
         signature: Some(name),
-        body: None,
+        body: Some(trimmed_node_text(node, source)),
         children: collect_generic_items(node, source, parse_toml_item),
     })
+}
+
+/// Normalize each TOML key component independently so quoting and whitespace do not
+/// change selector paths. Literal keys preserve backslashes; basic keys decode escapes.
+fn toml_key_name(node: Node<'_>, source: &str) -> String {
+    if node.kind() == "dotted_key" {
+        let mut cursor = node.walk();
+        return node
+            .named_children(&mut cursor)
+            .filter(|child| matches!(child.kind(), "bare_key" | "quoted_key" | "dotted_key"))
+            .map(|child| toml_key_name(child, source))
+            .collect::<Vec<_>>()
+            .join(".");
+    }
+    let text = trimmed_node_text(node, source);
+    if node.kind() != "quoted_key" {
+        return text;
+    }
+    if let Some(literal) = text.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+        return literal.to_owned();
+    }
+    let Some(basic) = text.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+        return text;
+    };
+    let mut result = String::new();
+    let mut chars = basic.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            result.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('b') => result.push('\u{0008}'),
+            Some('t') => result.push('\t'),
+            Some('n') => result.push('\n'),
+            Some('f') => result.push('\u{000c}'),
+            Some('r') => result.push('\r'),
+            Some('"') => result.push('"'),
+            Some('\\') => result.push('\\'),
+            Some(escape @ ('u' | 'U')) => {
+                let count = if escape == 'u' { 4 } else { 8 };
+                let digits: String = chars.by_ref().take(count).collect();
+                let decoded = u32::from_str_radix(&digits, 16)
+                    .ok()
+                    .and_then(char::from_u32);
+                if digits.len() != count || decoded.is_none() {
+                    return text;
+                }
+                result.push(decoded.unwrap());
+            }
+            // Preserve malformed keys when rendering a recovered syntax tree.
+            _ => return text,
+        }
+    }
+    result
 }
