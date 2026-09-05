@@ -1,0 +1,12 @@
+> apply 'ld src/patch.py:4-6'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.py
+TODO = "remove this marker"
+GREETING = "hello"
+
+
+
+
+class Settings:
+    timeout = 10
+===

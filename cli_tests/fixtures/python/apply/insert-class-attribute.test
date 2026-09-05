@@ -1,0 +1,15 @@
+> apply 'li src/patch.py:9 "    retries = 3\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.py
+TODO = "remove this marker"
+GREETING = "hello"
+
+
+def old_name(value: str) -> str:
+    return value.upper()
+
+
+class Settings:
+    retries = 3
+    timeout = 10
+===

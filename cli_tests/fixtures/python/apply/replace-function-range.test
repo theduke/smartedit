@@ -1,0 +1,14 @@
+> apply 'lr src/patch.py:4-6 "def title(value: str) -> str:\n    return value.title()\n"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.py
+TODO = "remove this marker"
+GREETING = "hello"
+
+
+def title(value: str) -> str:
+    return value.title()
+
+
+class Settings:
+    timeout = 10
+===

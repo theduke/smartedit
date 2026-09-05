@@ -1,0 +1,6 @@
+> ast-print --loc --type-bodies -S Worker.Config ./src/main.py
+[24-28] class Config:
+            """Runtime options for a worker."""
+
+            retries: int = 3
+===

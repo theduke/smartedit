@@ -1,0 +1,30 @@
+> ast-print --loc --signatures ./src/*.py ./src/*.pyi
+== src/api.pyi ==
+[3-5] class Renderer(Protocol):
+> [4-5] def render(self, value: str) -> str:
+[7-9] @overload
+      def parse(value: str) -> str:
+[11-13] @overload
+        def parse(value: bytes) -> bytes:
+== end src/api.pyi ==
+
+== src/main.py ==
+[5-8] def traced(func):
+[10-11] type NameFormatter = Callable[[str], str]
+[13-17] def greet(name: str, formatter: NameFormatter | None = None) -> str:
+[19-37] class Worker:
+> [24-28] class Config:
+> [29-37] @traced
+>         async def run(self, job: str) -> str:
+>> [33-35] def normalize(value: str) -> str:
+[39-53] def choose(flag: bool) -> str:
+> [41-43] def enabled() -> str:
+> [44-46] class Enabled:
+> [49-51] def disabled() -> str:
+== end src/main.py ==
+
+== src/patch.py ==
+[4-6] def old_name(value: str) -> str:
+[8-10] class Settings:
+== end src/patch.py ==
+===

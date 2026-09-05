@@ -1,0 +1,10 @@
+> ast-print --loc --function-bodies -s Worker.run ./src/main.py
+[29-37] @traced
+        async def run(self, job: str) -> str:
+            """Run one job asynchronously."""
+
+            def normalize(value: str) -> str:
+                return value.strip().lower()
+
+            return normalize(job)
+===

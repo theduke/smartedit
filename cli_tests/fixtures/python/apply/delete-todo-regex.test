@@ -1,0 +1,13 @@
+> apply 'ldm src/patch.py r"^TODO"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/patch.py
+GREETING = "hello"
+
+
+def old_name(value: str) -> str:
+    return value.upper()
+
+
+class Settings:
+    timeout = 10
+===
