@@ -2,11 +2,21 @@
 
 Supported languages:
 
-- Rust
-- Python
-- JavaScript (including JSX)
-- TypeScript (including TSX)
+- Bash / Shell
+- C and C++
+- C#
 - Go
+- Java
+- JavaScript (including JSX)
+- JSON, YAML, TOML
+- Kotlin
+- Lua
+- PHP
+- Python
+- Ruby
+- Rust
+- Scala
+- TypeScript (including TSX)
 
 `smartedit ast-print` prints a structured outline of source files. It is meant for quickly understanding a file without reading it top to bottom.
 
