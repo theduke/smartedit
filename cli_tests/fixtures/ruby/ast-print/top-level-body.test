@@ -1,0 +1,5 @@
+> ast-print --function-bodies --select compatibility_label ./src/main.rb
+def compatibility_label
+  Greetings::Greeter.default.greet
+end
+===

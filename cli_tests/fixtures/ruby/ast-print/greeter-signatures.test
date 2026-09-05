@@ -1,0 +1,8 @@
+> ast-print --loc --signatures --select 'Greetings.Greeter.*' ./src/main.rb
+[2-5] def initialize(name)
+[6-9] def greet(punctuation = "!")
+[10-13] def self.default
+[14-17] def self.label
+[18-23] class << self
+> [19-22] def version
+===
