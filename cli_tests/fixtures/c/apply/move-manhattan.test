@@ -1,0 +1,24 @@
+> apply 'lm src/helpers.c:2-5 src/main.c:10'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/helpers.c
+#include "api.h"
+
+
+Size point_size(void) {
+    return sizeof(Point);
+}
+=== src/main.c
+#include "api.h"
+
+int add(int left, int right) {
+    return left + right;
+}
+
+int main(void) {
+    Point origin = {0, 0};
+    return add(origin.x, origin.y);
+}
+int manhattan(Point point) {
+    return point.x + point.y;
+}
+===

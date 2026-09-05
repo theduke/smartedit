@@ -1,0 +1,19 @@
+> apply 'ld src/api.h:12-16'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/api.h
+typedef unsigned long Size;
+
+typedef struct Point {
+    int x;
+    int y;
+} Point;
+
+typedef union Value {
+    int integer;
+    float decimal;
+} Value;
+
+
+int manhattan(Point point);
+int (*callback)(int);
+===

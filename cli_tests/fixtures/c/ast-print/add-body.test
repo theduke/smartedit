@@ -1,0 +1,5 @@
+> ast-print --loc --function-bodies --select add ./src/main.c
+[2-5] int add(int left, int right) {
+          return left + right;
+      }
+===

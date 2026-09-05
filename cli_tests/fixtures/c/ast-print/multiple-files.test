@@ -1,0 +1,38 @@
+> ast-print --loc './src/*.{c,h}'
+== src/api.h ==
+[0-1] type Size
+[2-6 shared-line] struct Point
+> [3-4] variable x
+> [4-5] variable y
+[2-6 shared-line] type Point
+[7-11 shared-line] union Value
+> [8-9] variable integer
+> [9-10] variable decimal
+[7-11 shared-line] type Value
+[12-16] enum Color
+> [13-14 shared-line] variant COLOR_RED
+> [14-15 shared-line] variant COLOR_BLUE
+[17-18] function manhattan
+[18-19] variable callback
+== end src/api.h ==
+
+== src/declarators.h ==
+[0-1 shared-line] function first
+[0-1 shared-line] function second
+[1-2] function allocate
+[2-3] variable handler
+[3-4] variable handlers
+[4-5] function factory
+== end src/declarators.h ==
+
+== src/helpers.c ==
+[2-5] function manhattan
+[6-9] function point_size
+== end src/helpers.c ==
+
+== src/main.c ==
+[2-5] function add
+[6-10] function main
+> [7-8] variable origin
+== end src/main.c ==
+===
