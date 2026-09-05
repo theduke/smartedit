@@ -1,0 +1,6 @@
+> ast-print --loc --signatures ./src/functions.sh
+[3-7] function build_image()
+[8-13] deploy()
+[14-20] outer()
+> [15-18] helper()
+===

@@ -1,0 +1,24 @@
+> apply 'tr src/functions.sh "build_image" "build_container"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/functions.sh
+#!/usr/bin/env bash
+set -euo pipefail
+
+function build_container() {
+  local tag="$1"
+  docker build --tag "$tag" .
+}
+
+deploy() {
+  local environment="$1"
+  build_container "app:${environment}"
+  printf 'deploying %s\n' "$environment"
+}
+
+outer() {
+  helper() {
+    printf 'nested helper\n'
+  }
+  helper
+}
+===

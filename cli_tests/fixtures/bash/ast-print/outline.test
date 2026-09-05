@@ -1,0 +1,6 @@
+> ast-print --loc ./src/functions.sh
+[3-7] function build_image
+[8-13] function deploy
+[14-20] function outer
+> [15-18] function helper
+===

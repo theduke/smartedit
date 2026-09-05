@@ -1,0 +1,23 @@
+> apply 'ldm src/functions.sh r"^set -euo pipefail$"'
+Applied 1 modification(s) across 1 stage(s) in snapshot mode.
+=== src/functions.sh
+#!/usr/bin/env bash
+
+function build_image() {
+  local tag="$1"
+  docker build --tag "$tag" .
+}
+
+deploy() {
+  local environment="$1"
+  build_image "app:${environment}"
+  printf 'deploying %s\n' "$environment"
+}
+
+outer() {
+  helper() {
+    printf 'nested helper\n'
+  }
+  helper
+}
+===
