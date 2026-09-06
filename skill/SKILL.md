@@ -7,18 +7,20 @@ description: Prefer `smartedit ast-print` for exploring Rust, Python, JS/TS, Go,
 
 ## Default
 
-- Do not spend much time choosing tools.
-- If `smartedit` can plausibly do the job, try it first.
-- Prefer `smartedit` CLI subcommands over generic reads/writes when they fit.
 - Prefer `smartedit ast-print` before reading whole source files in any of its 19 supported languages.
 - Prefer `smartedit apply` with inline args before writing full-file patches.
-- Try `smartedit` once, then fall back if it is unsupported, awkward, or less clear.
+- Batch related inspection targets into one invocation; optimize both output size and tool round trips.
+- Fall back when `smartedit` is unsupported, awkward, or less clear.
 
 ## `smartedit ast-print`
 
 - Subcommand: `smartedit ast-print [options] <path-or-glob>...`
 - Supported languages: Rust, Python, JavaScript/JSX, TypeScript/TSX, Go, Java, Kotlin, Scala, Lua, C, C++, C#, Ruby, PHP, Bash, JSON, YAML, and TOML.
 - Use for: outlines, signatures, doc comments/docstrings, type bodies, function bodies, locations, nested item selection, type inspection, multi-file/glob scans.
+- Batch multiple paths or quoted globs as positional inputs. Repeat `-s/--select` and/or `-S/--type-select` for related selectors; each selector applies across all inputs, not just the adjacent file.
+- For unfamiliar code, prefer one bounded `--signatures --loc` query over the relevant entry points/modules, then one batched `--function-bodies` or `--type-bodies` query for the items needed to answer the task. If the targets are already known, go straight to the selected bodies.
+- Group targets you already know; avoid one call per file or symbol. Split queries when expected output is large or earlier results determine what to inspect next. Use narrower paths/selectors or signatures to bound output; an unfiltered repository-wide body dump defeats the savings.
+- Reuse the output already obtained. Do not routinely reopen whole files with `cat`, `sed`, or another read tool after inspecting them with `ast-print`; read the missing source context only when structure/selected bodies omit evidence you need. Stop exploring when the task is supported.
 - Default to `--loc` when the result may drive an edit.
 - `--loc` is the most important exploration flag for editing: it prints zero-based, half-open line ranges that use the same coordinates as `smartedit apply`.
 - Treat `--loc` output as the fast path from exploration to editing. A plain `[start-end]` span can be copied directly into `ld`, `lr`, or `lm` as `start-end`.
@@ -32,31 +34,18 @@ description: Prefer `smartedit ast-print` for exploring Rust, Python, JS/TS, Go,
 - Go methods use receiver-qualified paths such as `Box.Get`; grouped declarations remain independently selectable where their source spans permit it.
 
 ```bash
-# quick outline
-smartedit ast-print src/main.rs
+# bounded orientation: combine an entry point and a relevant module glob
+smartedit ast-print --signatures --loc src/main.rs 'src/cmd/*.rs'
 
-# locate a function or item before editing it
-smartedit ast-print -s 'resolve_ast_inputs' --loc src/cmd/ast_print.rs
+# fetch related bodies together, even when they live in different files
+smartedit ast-print --function-bodies --loc \
+  -s main -s resolve_ast_inputs src/main.rs src/cmd/ast_print.rs
 
-# signatures across multiple Rust files
-smartedit ast-print --signatures --loc 'src/**/*.rs'
+# repeat type selectors to inspect several types and their associated items
+smartedit ast-print --signatures --loc \
+  -S Cli -S CmdAstPrint src/main.rs src/cmd/ast_print.rs
 
-# quick Python outline
-smartedit ast-print src/example.py
-
-# Python class plus nested methods
-smartedit ast-print -S Greeter --signatures --doc src/example.py
-
-# quick JavaScript outline
-smartedit ast-print src/example.js
-
-# JavaScript class plus nested methods
-smartedit ast-print -S Greeter --signatures --doc src/example.js
-
-# quick TypeScript outline
-smartedit ast-print src/example.ts
-
-# TypeScript interface/class plus nested members
+# Python/JS/TS classes (and TS interfaces) plus nested members; use the matching file
 smartedit ast-print -S Greeter --signatures --doc src/example.ts
 
 # Go type, fields, interface members, and receiver methods
@@ -65,17 +54,11 @@ smartedit ast-print -S Box --signatures --doc src/example.go
 # signatures plus doc comments for one item subtree
 smartedit ast-print -s 'outer.inner.*' --doc --signatures src/file_ast.rs
 
-# nested selection
-smartedit ast-print -s 'outer.inner.*' --loc src/file_ast.rs
-
 # print a type definition and associated impl bodies
-smartedit ast-print -S AstSelector --type-bodies --loc src/file_ast.rs
-
-# print one function body
-smartedit ast-print -s 'resolve_ast_inputs' --function-bodies src/cmd/ast_print.rs
+smartedit ast-print -S AstSelector --type-bodies --loc lib/src/file_ast.rs
 
 # print one top-level function by name
-smartedit ast-print -s 'parse_edit_program' --function-bodies --loc src/parser.rs
+smartedit ast-print -s 'parse_edit_program' --function-bodies --loc lib/src/parser.rs
 ```
 
 ## `smartedit apply`
