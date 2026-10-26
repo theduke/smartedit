@@ -28,6 +28,25 @@ Use `smartedit` when an agent or operator should:
 
 You can download a release binary from the latest Github release at: https://github.com/theduke/smartedit/releases
 
+### mise
+
+Install the prebuilt binary globally with [mise](https://mise.jdx.dev/), and automatically install the bundled user skill:
+
+```bash
+mise use --global --postinstall "smartedit install-skill --user" \
+  github:theduke/smartedit@latest
+```
+
+Or add this to your `mise.toml` or global `~/.config/mise/config.toml`, then run `mise install`:
+
+```toml
+[tools."github:theduke/smartedit"]
+version = "latest"
+postinstall = "smartedit install-skill --user"
+```
+
+The tool's `postinstall` command writes the skill to `~/.agents/skills/smartedit/SKILL.md` after each installation or upgrade, replacing the previous bundled skill. Omit the post-install hook to install only the CLI.
+
 ### Cargo
 
 Install directly from Git:
