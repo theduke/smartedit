@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## [0.0.3](https://github.com/theduke/smartedit/compare/smartedit-cli-v0.0.2...smartedit-cli-v0.0.3) - 2026-10-26
+
+### Other
+
+- document mise installation and automatic skill setup
+
 ## [0.0.2](https://github.com/theduke/smartedit/compare/smartedit-cli-v0.0.1...smartedit-cli-v0.0.2) - 2026-09-05
 
 ### Added
